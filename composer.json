@@ -1,0 +1,41 @@
+{
+    "name": "notfy/hub-financial",
+    "description": "Hub financeiro compartilhado (gateways de pagamento + notas fiscais) usado pelo notfyAdmin e, futuramente, pelo notfy-app.",
+    "type": "library",
+    "license": "proprietary",
+    "require": {
+        "php": "^8.3",
+        "illuminate/support": "^13.0",
+        "illuminate/http": "^13.0"
+    },
+    "require-dev": {
+        "orchestra/testbench": "^11.0",
+        "pestphp/pest": "^4.0",
+        "laravel/pint": "^1.18"
+    },
+    "autoload": {
+        "psr-4": {
+            "Notfy\\HubFinancial\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Notfy\\HubFinancial\\Tests\\": "tests/"
+        }
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "Notfy\\HubFinancial\\HubFinancialServiceProvider"
+            ]
+        }
+    },
+    "config": {
+        "sort-packages": true,
+        "allow-plugins": {
+            "pestphp/pest-plugin": true
+        }
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true
+}
