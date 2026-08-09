@@ -158,6 +158,49 @@ final class AsaasBillingGateway implements BillingGateway
         ];
     }
 
+    /**
+     * Cria uma assinatura recorrente nativa do Asaas (fora do fluxo de checkout).
+     *
+     * @param  array<string, mixed>  $payload
+     * @return array<string, mixed>
+     */
+    public function createSubscription(array $payload): array
+    {
+        return $this->client->post('subscriptions', $payload);
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     * @return array<string, mixed>
+     */
+    public function updateSubscription(string $externalId, array $payload): array
+    {
+        return $this->client->put("subscriptions/{$externalId}", $payload);
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    public function fetchSubscription(string $externalId): ?array
+    {
+        try {
+            return $this->client->get("subscriptions/{$externalId}");
+        } catch (AsaasApiException) {
+            return null;
+        }
+    }
+
+    public function cancelSubscription(string $externalId): bool
+    {
+        try {
+            $result = $this->client->delete("subscriptions/{$externalId}");
+
+            return (bool) ($result['deleted'] ?? true);
+        } catch (AsaasApiException) {
+            return false;
+        }
+    }
+
     public function createBillingPortalSession(string $customerExternalId, string $returnUrl): array
     {
         // Asaas não tem um "billing portal" nativo (self-service) como o Stripe.

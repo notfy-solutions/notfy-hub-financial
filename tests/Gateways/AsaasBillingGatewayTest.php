@@ -99,3 +99,33 @@ it('returns false when deleting a customer fails', function () {
 
     expect(gateway()->deleteCustomer('cus_404'))->toBeFalse();
 });
+
+it('creates, updates, fetches and cancels a native subscription', function () {
+    Http::fake([
+        'api-sandbox.asaas.com/v3/subscriptions' => Http::response(['id' => 'sub_1', 'status' => 'ACTIVE'], 200),
+        'api-sandbox.asaas.com/v3/subscriptions/sub_1' => Http::response(['id' => 'sub_1', 'status' => 'ACTIVE', 'value' => 199.0], 200),
+    ]);
+
+    $created = gateway()->createSubscription(['customer' => 'cus_123', 'billingType' => 'PIX', 'value' => 199.0, 'cycle' => 'MONTHLY', 'nextDueDate' => '2026-09-01']);
+    expect($created['id'])->toBe('sub_1');
+
+    $updated = gateway()->updateSubscription('sub_1', ['value' => 199.0]);
+    expect($updated['id'])->toBe('sub_1');
+
+    $fetched = gateway()->fetchSubscription('sub_1');
+    expect($fetched['status'])->toBe('ACTIVE');
+
+    Http::fake([
+        'api-sandbox.asaas.com/v3/subscriptions/sub_1' => Http::response(['deleted' => true], 200),
+    ]);
+
+    expect(gateway()->cancelSubscription('sub_1'))->toBeTrue();
+});
+
+it('returns null when fetching a subscription that does not exist', function () {
+    Http::fake([
+        'api-sandbox.asaas.com/v3/subscriptions/missing' => Http::response(['errors' => [['description' => 'not found']]], 404),
+    ]);
+
+    expect(gateway()->fetchSubscription('missing'))->toBeNull();
+});
