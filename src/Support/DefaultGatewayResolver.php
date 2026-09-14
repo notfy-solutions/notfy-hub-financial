@@ -38,9 +38,9 @@ final class DefaultGatewayResolver implements GatewayResolver
         $routing = $this->routing[$context->getCountry()] ?? $this->routing['*'] ?? [];
         $type = $context->getPaymentType();
 
-        $gatewayName = ($type !== 'any' && isset($routing[$type]))
+        $gatewayName = $type !== 'any' && isset($routing[$type])
             ? $routing[$type]
-            : ($routing['default'] ?? array_key_first($this->gateways));
+            : $routing['default'] ?? array_key_first($this->gateways);
 
         if ($gatewayName === null) {
             throw new InvalidArgumentException('Nenhum gateway configurado.');
@@ -49,6 +49,9 @@ final class DefaultGatewayResolver implements GatewayResolver
         return $this->getGateway($gatewayName);
     }
 
+    /**
+     * @return array<int, BillingGateway>
+     */
     public function getAllAvailable(GatewayContext $context): array
     {
         $primary = $this->resolve($context);

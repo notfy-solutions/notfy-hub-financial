@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Notfy\HubFinancial\Webhooks;
 
+use Notfy\HubFinancial\Support\ApiPayload;
+
 final class AsaasWebhookParser
 {
     /**
@@ -24,13 +26,13 @@ final class AsaasWebhookParser
      */
     public function parse(array $payload): AsaasWebhookEvent
     {
-        $payment = (array) ($payload['payment'] ?? []);
+        $payment = ApiPayload::toAssocArray($payload['payment'] ?? null);
 
         return new AsaasWebhookEvent(
-            type: (string) ($payload['event'] ?? 'UNKNOWN'),
-            paymentId: isset($payment['id']) ? (string) $payment['id'] : null,
-            externalReference: isset($payment['externalReference']) ? (string) $payment['externalReference'] : null,
-            status: isset($payment['status']) ? (string) $payment['status'] : null,
+            type: ApiPayload::stringOrDefault($payload['event'] ?? null, 'UNKNOWN'),
+            paymentId: ApiPayload::optionalString($payment['id'] ?? null),
+            externalReference: ApiPayload::optionalString($payment['externalReference'] ?? null),
+            status: ApiPayload::optionalString($payment['status'] ?? null),
             rawPayload: $payload,
         );
     }

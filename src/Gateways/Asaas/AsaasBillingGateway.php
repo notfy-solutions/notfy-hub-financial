@@ -10,6 +10,7 @@ use Notfy\HubFinancial\DTO\ChargeResult;
 use Notfy\HubFinancial\DTO\CustomerInput;
 use Notfy\HubFinancial\DTO\CustomerResult;
 use Notfy\HubFinancial\Exceptions\AsaasApiException;
+use Notfy\HubFinancial\Support\ApiPayload;
 use RuntimeException;
 
 final class AsaasBillingGateway implements BillingGateway
@@ -32,7 +33,10 @@ final class AsaasBillingGateway implements BillingGateway
 
         $customer = $this->client->post('customers', $payload);
 
-        return new CustomerResult(externalId: (string) $customer['id'], raw: $customer);
+        return new CustomerResult(
+            externalId: ApiPayload::requiredString($customer['id'] ?? null, 'id'),
+            raw: $customer,
+        );
     }
 
     public function updateCustomer(string $externalId, CustomerInput $input): CustomerResult
@@ -49,7 +53,10 @@ final class AsaasBillingGateway implements BillingGateway
 
         $customer = $this->client->put("customers/{$externalId}", $payload);
 
-        return new CustomerResult(externalId: (string) $customer['id'], raw: $customer);
+        return new CustomerResult(
+            externalId: ApiPayload::requiredString($customer['id'] ?? null, 'id'),
+            raw: $customer,
+        );
     }
 
     public function deleteCustomer(string $externalId): bool
@@ -111,49 +118,32 @@ final class AsaasBillingGateway implements BillingGateway
         }
     }
 
+    /**
+     * @param  array<string, mixed>  $params
+     * @return array{id: ?string, url: ?string, raw: array<string, mixed>}
+     */
     public function createCheckoutSession(array $params): array
     {
-        $items = [];
-        foreach ((array) ($params['items'] ?? []) as $item) {
-            $items[] = [
-                'name' => $item['name'] ?? 'Produto',
-                'description' => $item['description'] ?? ($item['name'] ?? 'Produto'),
-                'quantity' => $item['quantity'] ?? 1,
-                'value' => round((float) ($item['amount'] ?? 0) / 100, 2),
-            ];
-        }
-
-        $isRecurring = ! empty($params['cycle']);
+        $cycle = $params['cycle'] ?? null;
+        $isRecurring = $cycle !== null && $cycle !== '';
 
         $payload = $this->filter([
             'billingTypes' => $params['billingTypes'] ?? ['CREDIT_CARD', 'PIX', 'BOLETO'],
             'chargeTypes' => [$isRecurring ? 'RECURRENT' : 'DETACHED'],
-            'items' => $items,
+            'items' => $this->checkoutItems($params['items'] ?? null),
             'callback' => $this->filter([
                 'successUrl' => $params['returnUrl'] ?? $params['successUrl'] ?? null,
                 'cancelUrl' => $params['cancelUrl'] ?? $params['returnUrl'] ?? null,
             ]),
         ]);
 
-        if (! empty($params['customerId'])) {
-            $payload['customer'] = $params['customerId'];
-        } elseif (! empty($params['customerData'])) {
-            $payload['customerData'] = $params['customerData'];
-        }
-
-        if ($isRecurring) {
-            $payload['subscription'] = ['cycle' => strtoupper((string) $params['cycle'])];
-        }
-
-        if (! empty($params['externalReference'])) {
-            $payload['externalReference'] = $params['externalReference'];
-        }
+        $payload = $this->applyCheckoutExtras($payload, $params, $isRecurring, $cycle);
 
         $checkout = $this->client->post('checkouts', $payload);
 
         return [
-            'id' => $checkout['id'] ?? null,
-            'url' => $checkout['link'] ?? null,
+            'id' => ApiPayload::optionalString($checkout['id'] ?? null),
+            'url' => ApiPayload::optionalString($checkout['link'] ?? null),
             'raw' => $checkout,
         ];
     }
@@ -201,6 +191,9 @@ final class AsaasBillingGateway implements BillingGateway
         }
     }
 
+    /**
+     * @return array{url: ?string, raw: array<string, mixed>}
+     */
     public function createBillingPortalSession(string $customerExternalId, string $returnUrl): array
     {
         // Asaas não tem um "billing portal" nativo (self-service) como o Stripe.
@@ -211,19 +204,22 @@ final class AsaasBillingGateway implements BillingGateway
             'status' => 'ACTIVE',
         ]);
 
-        $subscription = $subscriptions['data'][0] ?? null;
+        $subscriptionList = ApiPayload::toListOfArrays($subscriptions['data'] ?? null);
+        $subscription = $subscriptionList[0] ?? null;
 
         if ($subscription === null) {
             throw new RuntimeException('Nenhuma assinatura ativa encontrada para gerar sessão de billing portal.');
         }
 
+        $subscriptionItem = [
+            'name' => ApiPayload::stringOrDefault($subscription['description'] ?? null, 'Assinatura'),
+            'amount' => (int) round(ApiPayload::toFloat($subscription['value'] ?? null) * 100),
+            'quantity' => 1,
+        ];
+
         $session = $this->createCheckoutSession([
-            'items' => [[
-                'name' => $subscription['description'] ?? 'Assinatura',
-                'amount' => (int) round(((float) $subscription['value']) * 100),
-                'quantity' => 1,
-            ]],
-            'cycle' => $subscription['cycle'] ?? 'MONTHLY',
+            'items' => [$subscriptionItem],
+            'cycle' => ApiPayload::stringOrDefault($subscription['cycle'] ?? null, 'MONTHLY'),
             'returnUrl' => $returnUrl,
             'customerId' => $customerExternalId,
         ]);
@@ -234,14 +230,17 @@ final class AsaasBillingGateway implements BillingGateway
         ];
     }
 
+    /**
+     * @param  array<string, mixed>  $payment
+     */
     private function toChargeResult(array $payment): ChargeResult
     {
         return new ChargeResult(
-            externalId: (string) $payment['id'],
-            status: $this->mapStatus((string) ($payment['status'] ?? 'PENDING')),
-            invoiceUrl: $payment['invoiceUrl'] ?? null,
-            bankSlipUrl: $payment['bankSlipUrl'] ?? null,
-            pixCopyPaste: $payment['pixCopyPaste'] ?? null,
+            externalId: ApiPayload::requiredString($payment['id'] ?? null, 'id'),
+            status: $this->mapStatus(ApiPayload::stringOrDefault($payment['status'] ?? null, 'PENDING')),
+            invoiceUrl: ApiPayload::optionalString($payment['invoiceUrl'] ?? null),
+            bankSlipUrl: ApiPayload::optionalString($payment['bankSlipUrl'] ?? null),
+            pixCopyPaste: ApiPayload::optionalString($payment['pixCopyPaste'] ?? null),
             raw: $payment,
         );
     }
@@ -265,5 +264,55 @@ final class AsaasBillingGateway implements BillingGateway
     private function filter(array $data): array
     {
         return array_filter($data, static fn (mixed $value): bool => $value !== null && $value !== '');
+    }
+
+    /**
+     * @return list<array{name: string, description: string, quantity: int, value: float}>
+     */
+    private function checkoutItems(mixed $itemsParam): array
+    {
+        $items = [];
+
+        foreach (ApiPayload::toListOfArrays($itemsParam) as $item) {
+            $name = ApiPayload::stringOrDefault($item['name'] ?? null, 'Produto');
+
+            $items[] = [
+                'name' => $name,
+                'description' => ApiPayload::stringOrDefault($item['description'] ?? null, $name),
+                'quantity' => ApiPayload::toInt($item['quantity'] ?? null, 1),
+                'value' => round(ApiPayload::toFloat($item['amount'] ?? null) / 100, 2),
+            ];
+        }
+
+        return $items;
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     * @param  array<string, mixed>  $params
+     * @return array<string, mixed>
+     */
+    private function applyCheckoutExtras(array $payload, array $params, bool $isRecurring, mixed $cycle): array
+    {
+        $customerId = ApiPayload::optionalString($params['customerId'] ?? null);
+        $customerData = $params['customerData'] ?? null;
+
+        if ($customerId !== null && $customerId !== '') {
+            $payload['customer'] = $customerId;
+        } elseif ($customerData !== null && $customerData !== '') {
+            $payload['customerData'] = $customerData;
+        }
+
+        if ($isRecurring) {
+            $payload['subscription'] = ['cycle' => strtoupper(ApiPayload::stringOrDefault($cycle, ''))];
+        }
+
+        $externalReference = ApiPayload::optionalString($params['externalReference'] ?? null);
+
+        if ($externalReference !== null && $externalReference !== '') {
+            $payload['externalReference'] = $externalReference;
+        }
+
+        return $payload;
     }
 }

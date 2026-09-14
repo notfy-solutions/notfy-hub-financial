@@ -12,8 +12,11 @@ final class DefaultGatewayContext implements GatewayContext
         private readonly string $paymentType = 'any',
     ) {}
 
-    public static function make(?string $preferredGateway = null, string $country = 'BR', string $paymentType = 'any'): self
-    {
+    public static function make(
+        ?string $preferredGateway = null,
+        string $country = 'BR',
+        string $paymentType = 'any',
+    ): self {
         return new self($preferredGateway, $country, $paymentType);
     }
 

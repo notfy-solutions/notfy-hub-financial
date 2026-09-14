@@ -4,9 +4,11 @@ declare(strict_types=1);
 
 namespace Notfy\HubFinancial\Gateways\Asaas;
 
+use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
 use Notfy\HubFinancial\Exceptions\AsaasApiException;
+use Notfy\HubFinancial\Support\ApiPayload;
 use RuntimeException;
 
 /**
@@ -61,7 +63,7 @@ final class AsaasHttpClient
         return $this->handle($this->client()->delete($endpoint, $data));
     }
 
-    private function client(): \Illuminate\Http\Client\PendingRequest
+    private function client(): PendingRequest
     {
         return Http::withHeaders([
             'access_token' => $this->apiKey,
@@ -77,12 +79,16 @@ final class AsaasHttpClient
      */
     private function handle(Response $response): array
     {
-        if ($response->failed()) {
-            $message = (string) ($response->json('errors.0.description') ?? $response->json('message') ?? $response->body());
+        $data = ApiPayload::toAssocArray($response->json());
 
-            throw new AsaasApiException($message, $response->status(), (array) ($response->json() ?? []));
+        if ($response->failed()) {
+            $message = ApiPayload::optionalString($response->json('errors.0.description'))
+                ?? ApiPayload::optionalString($response->json('message'))
+                ?? $response->body();
+
+            throw new AsaasApiException($message, $response->status(), $data);
         }
 
-        return (array) ($response->json() ?? []);
+        return $data;
     }
 }

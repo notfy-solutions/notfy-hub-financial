@@ -6,13 +6,14 @@ namespace Notfy\HubFinancial;
 
 use Illuminate\Support\ServiceProvider;
 use Notfy\HubFinancial\Contracts\BillingGateway;
-use Notfy\HubFinancial\Contracts\NotaFiscalGateway;
 use Notfy\HubFinancial\Gateways\Asaas\AsaasBillingGateway;
 use Notfy\HubFinancial\Gateways\Asaas\AsaasHttpClient;
-use Notfy\HubFinancial\Gateways\Asaas\AsaasNotaFiscalService;
+use Notfy\HubFinancial\Gateways\Stripe\StripeBillingGateway;
 use Notfy\HubFinancial\Support\DefaultGatewayResolver;
 use Notfy\HubFinancial\Support\GatewayResolver;
 use Notfy\HubFinancial\Webhooks\AsaasWebhookParser;
+use Notfy\HubFinancial\Webhooks\StripeWebhookParser;
+use Stripe\StripeClient;
 
 final class HubFinancialServiceProvider extends ServiceProvider
 {
@@ -33,8 +34,36 @@ final class HubFinancialServiceProvider extends ServiceProvider
             );
         });
 
-        $this->app->singleton(AsaasBillingGateway::class, fn ($app) => new AsaasBillingGateway($app->make(AsaasHttpClient::class)));
-        $this->app->singleton(AsaasNotaFiscalService::class, fn ($app) => new AsaasNotaFiscalService($app->make(AsaasHttpClient::class)));
+        $this->app->singleton(
+            AsaasBillingGateway::class,
+            fn ($app) => new AsaasBillingGateway($app->make(AsaasHttpClient::class)),
+        );
+
+        // Mesma lógica de BYO key do Asaas acima, agora para a secret key do
+        // Stripe. Usa o SDK oficial (StripeClient) em vez de um wrapper HTTP
+        // próprio — o Stripe mantém e testa esse cliente, não faz sentido
+        // reimplementar serialização/erros/retries na mão como fizemos para
+        // o Asaas (que não tem SDK PHP oficial mantido).
+        $this->app->singleton(StripeClient::class, function ($app): StripeClient {
+            $config = (array) $app['config']->get('hub-financial.gateways.stripe', []);
+            $clientConfig = ['api_key' => (string) ($config['secret_key'] ?? '')];
+            $baseUrl = $config['base_url'] ?? null;
+
+            if ($baseUrl !== null && $baseUrl !== '') {
+                $clientConfig['api_base'] = (string) $baseUrl;
+            }
+
+            return new StripeClient($clientConfig);
+        });
+
+        $this->app->singleton(StripeBillingGateway::class, function ($app): StripeBillingGateway {
+            $config = (array) $app['config']->get('hub-financial.gateways.stripe', []);
+
+            return new StripeBillingGateway(
+                client: $app->make(StripeClient::class),
+                defaultCurrency: (string) ($config['default_currency'] ?? 'usd'),
+            );
+        });
 
         $this->app->singleton(GatewayResolver::class, function ($app): GatewayResolver {
             $config = (array) $app['config']->get('hub-financial', []);
@@ -46,8 +75,8 @@ final class HubFinancialServiceProvider extends ServiceProvider
         });
 
         $this->app->singleton(BillingGateway::class, fn ($app) => $app->make(GatewayResolver::class)->resolve());
-        $this->app->singleton(NotaFiscalGateway::class, AsaasNotaFiscalService::class);
         $this->app->singleton(AsaasWebhookParser::class);
+        $this->app->singleton(StripeWebhookParser::class);
     }
 
     public function boot(): void

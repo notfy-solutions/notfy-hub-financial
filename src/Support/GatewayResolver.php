@@ -11,7 +11,7 @@ interface GatewayResolver
     public function resolve(?GatewayContext $context = null): BillingGateway;
 
     /**
-     * @return BillingGateway[]
+     * @return array<int, BillingGateway>
      */
     public function getAllAvailable(GatewayContext $context): array;
 }

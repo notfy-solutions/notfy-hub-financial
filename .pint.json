@@ -1,0 +1,43 @@
+{
+    "preset": "laravel",
+    "rules": {
+        "@PSR12": true,
+        "array_indentation": true,
+        "array_syntax": {
+            "syntax": "short"
+        },
+        "class_attributes_separation": true,
+        "declare_strict_types": true,
+        "explicit_indirect_variables": true,
+        "explicit_string_interpolation": true,
+        "fully_qualified_strict_types": true,
+        "method_chaining_indentation": true,
+        "no_blank_lines_after_class_opening": true,
+        "no_trailing_comma_in_list_call": true,
+        "ordered_imports": {
+            "imports_order": [
+                "class",
+                "function",
+                "const"
+            ]
+        },
+        "trailing_comma_in_multiline": {
+            "elements": [
+                "arrays",
+                "arguments",
+                "parameters"
+            ]
+        },
+        "phpdoc_to_comment": false,
+        "single_line_comment_style": {
+            "comment_types": [
+                "hash"
+            ]
+        }
+    },
+    "exclude": [
+        "vendor",
+        "build",
+        ".idea"
+    ]
+}

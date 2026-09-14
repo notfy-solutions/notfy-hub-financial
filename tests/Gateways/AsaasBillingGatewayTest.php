@@ -100,6 +100,34 @@ it('returns false when deleting a customer fails', function () {
     expect(gateway()->deleteCustomer('cus_404'))->toBeFalse();
 });
 
+it('returns true when a customer is deleted', function () {
+    Http::fake([
+        'api-sandbox.asaas.com/v3/customers/cus_123' => Http::response(['deleted' => true], 200),
+    ]);
+
+    expect(gateway()->deleteCustomer('cus_123'))->toBeTrue();
+});
+
+it('maps deleted and unknown statuses', function () {
+    Http::fake([
+        'api-sandbox.asaas.com/v3/payments/pay_deleted' => Http::response(['id' => 'pay_deleted', 'status' => 'DELETED'], 200),
+    ]);
+
+    expect(gateway()->fetchCharge('pay_deleted')->status)->toBe('DELETED');
+
+    Http::fake([
+        'api-sandbox.asaas.com/v3/payments/pay_received' => Http::response(['id' => 'pay_received', 'status' => 'RECEIVED_IN_CASH'], 200),
+    ]);
+
+    expect(gateway()->fetchCharge('pay_received')->status)->toBe('RECEIVED');
+
+    Http::fake([
+        'api-sandbox.asaas.com/v3/payments/pay_unknown' => Http::response(['id' => 'pay_unknown', 'status' => 'AWAITING_RISK_ANALYSIS'], 200),
+    ]);
+
+    expect(gateway()->fetchCharge('pay_unknown')->status)->toBe('PENDING');
+});
+
 it('creates, updates, fetches and cancels a native subscription', function () {
     Http::fake([
         'api-sandbox.asaas.com/v3/subscriptions' => Http::response(['id' => 'sub_1', 'status' => 'ACTIVE'], 200),
@@ -128,4 +156,125 @@ it('returns null when fetching a subscription that does not exist', function () 
     ]);
 
     expect(gateway()->fetchSubscription('missing'))->toBeNull();
+});
+
+it('updates a customer', function () {
+    Http::fake([
+        'api-sandbox.asaas.com/v3/customers/cus_123' => Http::response(['id' => 'cus_123', 'name' => 'Fulano Editado'], 200),
+    ]);
+
+    $result = gateway()->updateCustomer('cus_123', new CustomerInput(
+        name: 'Fulano Editado',
+        document: '123.456.789-00',
+        email: 'fulano@example.com',
+        phone: '11999999999',
+        externalReference: 'client-1',
+        postalCode: '01000-000',
+        addressNumber: '100',
+    ));
+
+    expect($result->externalId)->toBe('cus_123');
+
+    Http::assertSent(fn ($request) => $request['cpfCnpj'] === '12345678900'
+        && $request['mobilePhone'] === '11999999999'
+        && $request['externalReference'] === 'client-1'
+        && $request['postalCode'] === '01000-000'
+        && $request['addressNumber'] === '100');
+});
+
+it('refunds a charge fully and partially', function () {
+    Http::fake([
+        'api-sandbox.asaas.com/v3/payments/pay_1/refund' => Http::response(['id' => 'pay_1', 'status' => 'REFUNDED'], 200),
+    ]);
+
+    expect(gateway()->refundCharge('pay_1'))->toBeTrue();
+    expect(gateway()->refundCharge('pay_1', 5000))->toBeTrue();
+
+    Http::assertSent(fn ($request) => $request->data() === []);
+    Http::assertSent(fn ($request) => ($request['value'] ?? null) === 50.0);
+});
+
+it('returns false when a refund fails', function () {
+    Http::fake([
+        'api-sandbox.asaas.com/v3/payments/pay_err/refund' => Http::response(['errors' => [['description' => 'already refunded']]], 400),
+    ]);
+
+    expect(gateway()->refundCharge('pay_err'))->toBeFalse();
+});
+
+it('cancels a charge', function () {
+    Http::fake([
+        'api-sandbox.asaas.com/v3/payments/pay_1' => Http::response(['deleted' => true], 200),
+    ]);
+
+    expect(gateway()->cancelCharge('pay_1'))->toBeTrue();
+});
+
+it('returns false when canceling a charge fails', function () {
+    Http::fake([
+        'api-sandbox.asaas.com/v3/payments/pay_err' => Http::response(['errors' => [['description' => 'not found']]], 404),
+    ]);
+
+    expect(gateway()->cancelCharge('pay_err'))->toBeFalse();
+});
+
+it('returns false when canceling a subscription fails', function () {
+    Http::fake([
+        'api-sandbox.asaas.com/v3/subscriptions/sub_err' => Http::response(['errors' => [['description' => 'not found']]], 404),
+    ]);
+
+    expect(gateway()->cancelSubscription('sub_err'))->toBeFalse();
+});
+
+it('generates a billing portal session from the active subscription', function () {
+    Http::fake([
+        'api-sandbox.asaas.com/v3/subscriptions*' => Http::response([
+            'data' => [[
+                'id' => 'sub_1',
+                'description' => 'Plano Pro',
+                'value' => 199.0,
+                'cycle' => 'MONTHLY',
+            ]],
+        ], 200),
+        'api-sandbox.asaas.com/v3/checkouts' => Http::response(['id' => 'checkout_1', 'link' => 'https://asaas.com/checkout/1'], 200),
+    ]);
+
+    $session = gateway()->createBillingPortalSession('cus_123', 'https://app.notfy.com/return');
+
+    expect($session['url'])->toBe('https://asaas.com/checkout/1');
+
+    Http::assertSent(fn ($request) => ($request['items'][0]['name'] ?? null) === 'Plano Pro'
+        && $request['items'][0]['value'] === 199.0
+        && $request['subscription']['cycle'] === 'MONTHLY');
+});
+
+it('generates a billing portal session using default values when the subscription lacks them', function () {
+    Http::fake([
+        'api-sandbox.asaas.com/v3/subscriptions*' => Http::response([
+            'data' => [['id' => 'sub_2']],
+        ], 200),
+        'api-sandbox.asaas.com/v3/checkouts' => Http::response(['id' => 'checkout_2', 'link' => 'https://asaas.com/checkout/2'], 200),
+    ]);
+
+    gateway()->createBillingPortalSession('cus_123', 'https://app.notfy.com/return');
+
+    Http::assertSent(fn ($request) => ($request['items'][0]['name'] ?? null) === 'Assinatura'
+        && $request['subscription']['cycle'] === 'MONTHLY');
+});
+
+it('creates a checkout session using inline customer data instead of a customer id', function () {
+    Http::fake([
+        'api-sandbox.asaas.com/v3/checkouts' => Http::response(['id' => 'checkout_3', 'link' => 'https://asaas.com/checkout/3'], 200),
+    ]);
+
+    gateway()->createCheckoutSession([
+        'items' => [['name' => 'Plano Pro', 'amount' => 19900, 'quantity' => 1]],
+        'returnUrl' => 'https://app.notfy.com/success',
+        'customerData' => ['name' => 'Fulano', 'email' => 'fulano@example.com'],
+        'externalReference' => 'checkout-ref-1',
+    ]);
+
+    Http::assertSent(fn ($request) => $request['customerData'] === ['name' => 'Fulano', 'email' => 'fulano@example.com']
+        && $request['externalReference'] === 'checkout-ref-1'
+        && ! array_key_exists('customer', $request->data()));
 });

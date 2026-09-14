@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use Notfy\HubFinancial\Gateways\Asaas\AsaasBillingGateway;
+use Notfy\HubFinancial\Gateways\Stripe\StripeBillingGateway;
 
 return [
     /*
@@ -25,15 +26,28 @@ return [
             'base_url' => env('ASAAS_API_URL', 'https://api-sandbox.asaas.com/v3'),
             'webhook_auth_token' => env('ASAAS_WEBHOOK_TOKEN'),
         ],
+        'stripe' => [
+            'class' => StripeBillingGateway::class,
+            'secret_key' => env('STRIPE_SECRET_KEY'),
+            // Deixe em branco em produção: o SDK já usa a API oficial do
+            // Stripe por padrão. Só defina para apontar pra um servidor de
+            // testes (ex.: stripe-mock) — o SDK anexa "/v1" sozinho, então
+            // não inclua o sufixo aqui.
+            'base_url' => env('STRIPE_API_URL'),
+            'webhook_secret' => env('STRIPE_WEBHOOK_SECRET'),
+            'default_currency' => env('STRIPE_DEFAULT_CURRENCY', 'usd'),
+        ],
     ],
 
     /*
     |--------------------------------------------------------------------------
     | Roteamento por país/tipo de pagamento
     |--------------------------------------------------------------------------
+    | Brasil usa Asaas (pix/boleto locais); qualquer outro país cai no
+    | Stripe (cartão internacional) por padrão.
     */
     'routing' => [
         'BR' => ['default' => 'asaas'],
-        '*' => ['default' => 'asaas'],
+        '*' => ['default' => 'stripe'],
     ],
 ];

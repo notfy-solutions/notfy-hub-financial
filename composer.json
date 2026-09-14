@@ -1,17 +1,23 @@
 {
     "name": "notfy/hub-financial",
-    "description": "Hub financeiro compartilhado (gateways de pagamento + notas fiscais) usado pelo notfyAdmin e, futuramente, pelo notfy-app.",
+    "description": "Hub financeiro compartilhado (gateways de pagamento/cobrança) usado pelo notfyAdmin e, futuramente, pelo notfy-app.",
     "type": "library",
     "license": "proprietary",
     "require": {
-        "php": "^8.3",
+        "php": "^8.5",
+        "illuminate/http": "^13.0",
         "illuminate/support": "^13.0",
-        "illuminate/http": "^13.0"
+        "stripe/stripe-php": "^21.0"
     },
     "require-dev": {
+        "laravel/pint": "^1.18",
+        "league/commonmark": "^2.10",
+        "nunomaduro/phpinsights": "^2.14",
         "orchestra/testbench": "^11.0",
         "pestphp/pest": "^4.0",
-        "laravel/pint": "^1.18"
+        "phpstan/phpstan": "^2.0",
+        "phpstan/phpstan-deprecation-rules": "^2.0",
+        "phpstan/phpstan-strict-rules": "^2.0"
     },
     "autoload": {
         "psr-4": {
@@ -30,10 +36,24 @@
             ]
         }
     },
+    "scripts": {
+        "test": "pest --coverage --min=99",
+        "stan": "phpstan analyse --memory-limit=2G",
+        "pint": "pint",
+        "pint:check": "pint --test",
+        "insights": "phpinsights analyse src --no-interaction",
+        "quality": [
+            "@stan",
+            "@pint:check",
+            "@insights",
+            "@test"
+        ]
+    },
     "config": {
         "sort-packages": true,
         "allow-plugins": {
-            "pestphp/pest-plugin": true
+            "pestphp/pest-plugin": true,
+            "dealerdirect/phpcodesniffer-composer-installer": true
         }
     },
     "minimum-stability": "stable",
