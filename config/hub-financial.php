@@ -23,7 +23,7 @@ return [
         'asaas' => [
             'class' => AsaasBillingGateway::class,
             'api_key' => env('ASAAS_API_KEY'),
-            'base_url' => env('ASAAS_API_URL', 'https://api-sandbox.asaas.com/v3'),
+            'environment' => env('ASAAS_ENVIRONMENT', 'sandbox'),
             'webhook_auth_token' => env('ASAAS_WEBHOOK_TOKEN'),
         ],
         'stripe' => [

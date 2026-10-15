@@ -17,7 +17,7 @@ abstract class TestCase extends BaseTestCase
     protected function defineEnvironment($app): void
     {
         $app['config']->set('hub-financial.gateways.asaas.api_key', 'test-key');
-        $app['config']->set('hub-financial.gateways.asaas.base_url', 'https://api-sandbox.asaas.com/v3');
+        $app['config']->set('hub-financial.gateways.asaas.environment', 'sandbox');
         $app['config']->set('hub-financial.gateways.stripe.secret_key', 'sk_test_123');
         $app['config']->set('hub-financial.gateways.stripe.webhook_secret', 'whsec_test_123');
     }

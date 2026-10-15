@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Notfy\HubFinancial\Gateways\Asaas;
 
 use Notfy\HubFinancial\Contracts\BillingGateway;
+use Notfy\HubFinancial\Contracts\SubscriptionGateway;
 use Notfy\HubFinancial\DTO\ChargeInput;
 use Notfy\HubFinancial\DTO\ChargeResult;
 use Notfy\HubFinancial\DTO\CustomerInput;
@@ -13,7 +14,7 @@ use Notfy\HubFinancial\Exceptions\AsaasApiException;
 use Notfy\HubFinancial\Support\ApiPayload;
 use RuntimeException;
 
-final class AsaasBillingGateway implements BillingGateway
+final class AsaasBillingGateway implements BillingGateway, SubscriptionGateway
 {
     public function __construct(
         private readonly AsaasHttpClient $client,

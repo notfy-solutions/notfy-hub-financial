@@ -4,7 +4,10 @@ declare(strict_types=1);
 
 namespace Notfy\HubFinancial\Webhooks;
 
+use Notfy\HubFinancial\Contracts\WebhookHandler;
+use Notfy\HubFinancial\Domain\Enums\PaymentEventType;
 use Notfy\HubFinancial\Support\ApiPayload;
+use Notfy\HubFinancial\Support\GatewayAccount;
 use Stripe\Exception\SignatureVerificationException;
 use Stripe\Exception\UnexpectedValueException;
 use Stripe\Webhook;
@@ -22,7 +25,7 @@ use Stripe\Webhook;
  *
  * @see https://docs.stripe.com/webhooks#verify-manually
  */
-final class StripeWebhookParser
+final class StripeWebhookParser implements WebhookHandler
 {
     public function isValid(
         string $payload,
@@ -43,6 +46,13 @@ final class StripeWebhookParser
         }
     }
 
+    public function verify(string $rawBody, array $headers, GatewayAccount $account): bool
+    {
+        $signatureHeader = $headers['Stripe-Signature'] ?? $headers['stripe-signature'] ?? null;
+
+        return $this->isValid($rawBody, $signatureHeader, $account->webhookSecret ?? '');
+    }
+
     /**
      * @param  array<string, mixed>  $payload
      */
@@ -59,5 +69,43 @@ final class StripeWebhookParser
             status: ApiPayload::optionalString($object['status'] ?? null),
             rawPayload: $payload,
         );
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     */
+    public function normalize(array $payload): PaymentEvent
+    {
+        $event = $this->parse($payload);
+        $data = ApiPayload::toAssocArray($payload['data'] ?? null);
+        $object = ApiPayload::toAssocArray($data['object'] ?? null);
+        $amountRaw = ApiPayload::toInt($object['amount'] ?? null);
+        $createdAt = ApiPayload::toInt($payload['created'] ?? null);
+
+        return new PaymentEvent(
+            type: $this->mapEventType($event->type),
+            chargeId: $event->objectId ?? '',
+            externalReference: $event->externalReference,
+            amountPaidCents: $amountRaw > 0 ? $amountRaw : null,
+            feeCents: null,
+            paidAt: $createdAt > 0 ? gmdate('Y-m-d H:i:s', $createdAt) : null,
+            provider: 'stripe',
+            eventId: ApiPayload::stringOrDefault($payload['id'] ?? null, ''),
+            raw: $payload,
+        );
+    }
+
+    private function mapEventType(string $stripeEvent): PaymentEventType
+    {
+        return match ($stripeEvent) {
+            'payment_intent.created' => PaymentEventType::Created,
+            'payment_intent.succeeded', 'charge.succeeded' => PaymentEventType::Received,
+            'payment_intent.payment_failed', 'charge.failed' => PaymentEventType::Overdue,
+            'payment_intent.canceled' => PaymentEventType::Cancelled,
+            'charge.refunded', 'charge.refund.updated' => PaymentEventType::Refunded,
+            'charge.dispute.created', 'charge.dispute.funds_withdrawn' => PaymentEventType::Chargeback,
+            'payment_intent.processing', 'payment_intent.requires_action' => PaymentEventType::Updated,
+            default => PaymentEventType::Unknown,
+        };
     }
 }

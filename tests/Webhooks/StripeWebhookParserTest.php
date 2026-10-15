@@ -128,3 +128,81 @@ it('handles unknown event payloads gracefully', function () {
         ->and($event->status)->toBeNull()
         ->and($event->isPaymentEvent())->toBeFalse();
 });
+
+// ─── WebhookHandler contract ─────────────────────────────────────────────────
+
+use Notfy\HubFinancial\Credentials\ApiKey;
+use Notfy\HubFinancial\Domain\Enums\PaymentEventType;
+use Notfy\HubFinancial\Support\GatewayAccount;
+
+it('verify() uses the Stripe-Signature header and the account webhook secret', function () {
+    $parser = new StripeWebhookParser;
+    $payload = '{"id":"evt_1"}';
+    $secret = 'whsec_verify_test';
+    $header = stripeSignatureHeader($payload, $secret);
+    $account = new GatewayAccount('stripe', new ApiKey('sk_key'), webhookSecret: $secret);
+
+    expect($parser->verify($payload, ['Stripe-Signature' => $header], $account))->toBeTrue()
+        ->and($parser->verify($payload, ['stripe-signature' => $header], $account))->toBeTrue()
+        ->and($parser->verify($payload, [], $account))->toBeFalse();
+});
+
+it('normalize() returns a PaymentEvent with all fields mapped', function () {
+    $parser = new StripeWebhookParser;
+
+    $payload = [
+        'id' => 'evt_123',
+        'type' => 'payment_intent.succeeded',
+        'created' => 1768478400,
+        'data' => [
+            'object' => [
+                'id' => 'pi_123',
+                'status' => 'succeeded',
+                'amount' => 10000,
+                'metadata' => ['external_reference' => 'invoice-1'],
+            ],
+        ],
+    ];
+
+    $event = $parser->normalize($payload);
+
+    expect($event->type)->toBe(PaymentEventType::Received)
+        ->and($event->chargeId)->toBe('pi_123')
+        ->and($event->externalReference)->toBe('invoice-1')
+        ->and($event->amountPaidCents)->toBe(10000)
+        ->and($event->feeCents)->toBeNull()
+        ->and($event->paidAt)->toBe('2026-01-15 12:00:00')
+        ->and($event->provider)->toBe('stripe')
+        ->and($event->eventId)->toBe('evt_123')
+        ->and($event->raw)->toBe($payload);
+});
+
+it('normalize() returns null amountPaidCents when amount is absent', function () {
+    $parser = new StripeWebhookParser;
+
+    $event = $parser->normalize(['id' => 'evt_1', 'type' => 'payment_intent.created', 'data' => ['object' => ['id' => 'pi_1']]]);
+
+    expect($event->amountPaidCents)->toBeNull();
+});
+
+it('normalize() maps every Stripe event type to the correct PaymentEventType', function (string $stripeEvent, PaymentEventType $expected) {
+    $parser = new StripeWebhookParser;
+
+    $event = $parser->normalize(['id' => 'evt_1', 'type' => $stripeEvent, 'data' => ['object' => ['id' => 'pi_1']]]);
+
+    expect($event->type)->toBe($expected);
+})->with([
+    ['payment_intent.created', PaymentEventType::Created],
+    ['payment_intent.succeeded', PaymentEventType::Received],
+    ['charge.succeeded', PaymentEventType::Received],
+    ['payment_intent.payment_failed', PaymentEventType::Overdue],
+    ['charge.failed', PaymentEventType::Overdue],
+    ['payment_intent.canceled', PaymentEventType::Cancelled],
+    ['charge.refunded', PaymentEventType::Refunded],
+    ['charge.refund.updated', PaymentEventType::Refunded],
+    ['charge.dispute.created', PaymentEventType::Chargeback],
+    ['charge.dispute.funds_withdrawn', PaymentEventType::Chargeback],
+    ['payment_intent.processing', PaymentEventType::Updated],
+    ['payment_intent.requires_action', PaymentEventType::Updated],
+    ['some.future.event', PaymentEventType::Unknown],
+]);
