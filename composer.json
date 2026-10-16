@@ -2,7 +2,7 @@
     "name": "notfy/hub-financial",
     "description": "Hub financeiro compartilhado (gateways de pagamento/cobrança) usado pelo notfyAdmin e, futuramente, pelo notfy-app.",
     "type": "library",
-    "version": "1.1.0",
+    "version": "1.2.0",
     "license": "proprietary",
     "require": {
         "php": "^8.5",
