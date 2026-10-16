@@ -3,12 +3,13 @@
 declare(strict_types=1);
 
 use Illuminate\Support\ServiceProvider;
-use Notfy\HubFinancial\Contracts\BillingGateway;
 use Notfy\HubFinancial\Credentials\ApiKey;
 use Notfy\HubFinancial\Gateways\Asaas\AsaasBillingGateway;
 use Notfy\HubFinancial\Gateways\Asaas\AsaasEnvironment;
 use Notfy\HubFinancial\Gateways\Asaas\AsaasHttpClient;
+use Notfy\HubFinancial\Gateways\Asaas\AsaasPlugin;
 use Notfy\HubFinancial\Gateways\Stripe\StripeBillingGateway;
+use Notfy\HubFinancial\Gateways\Stripe\StripePlugin;
 use Notfy\HubFinancial\HubFinancialServiceProvider;
 use Notfy\HubFinancial\Support\GatewayAccount;
 use Notfy\HubFinancial\Support\GatewayManager;
@@ -22,35 +23,19 @@ it('merges the package config', function () {
         ->and(config('hub-financial.routing.*.default'))->toBe('stripe');
 });
 
-it('resolves the Asaas http client and gateway from config', function () {
-    expect(app(AsaasHttpClient::class))->toBeInstanceOf(AsaasHttpClient::class)
-        ->and(app(AsaasBillingGateway::class))->toBeInstanceOf(AsaasBillingGateway::class);
-});
-
-it('resolves the Stripe client and gateway from config', function () {
-    expect(app(StripeClient::class))->toBeInstanceOf(StripeClient::class)
-        ->and(app(StripeClient::class)->getApiKey())->toBe('sk_test_123')
-        ->and(app(StripeBillingGateway::class))->toBeInstanceOf(StripeBillingGateway::class);
-});
-
-it('applies a custom Stripe api_base when one is configured', function () {
-    config(['hub-financial.gateways.stripe.base_url' => 'https://stripe-mock.local']);
-    app()->forgetInstance(StripeClient::class);
-
-    expect(app(StripeClient::class)->getApiBase())->toBe('https://stripe-mock.local');
+it('does not read any credential from config or env', function () {
+    expect(config('hub-financial'))->not->toHaveKeys(['gateways', 'default'])
+        ->and(app()->bound(StripeClient::class))->toBeFalse()
+        ->and(app()->bound(AsaasHttpClient::class))->toBeFalse();
 });
 
 it('resolves the gateway resolver as a singleton', function () {
     expect(app(GatewayResolver::class))->toBe(app(GatewayResolver::class));
 });
 
-it('resolves the default BillingGateway binding via the resolver', function () {
-    expect(app(BillingGateway::class))->toBeInstanceOf(AsaasBillingGateway::class);
-});
-
-it('resolves the webhook parsers', function () {
-    expect(app(AsaasWebhookParser::class))->toBeInstanceOf(AsaasWebhookParser::class)
-        ->and(app(StripeWebhookParser::class))->toBeInstanceOf(StripeWebhookParser::class);
+it('resolves the webhook parsers through the plugins', function () {
+    expect((new AsaasPlugin)->webhookHandler())->toBeInstanceOf(AsaasWebhookParser::class)
+        ->and((new StripePlugin)->webhookHandler())->toBeInstanceOf(StripeWebhookParser::class);
 });
 
 it('registers the config file for publishing', function () {

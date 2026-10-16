@@ -18,5 +18,6 @@ final class ChargeResult
         public readonly ?string $bankSlipUrl = null,
         public readonly ?string $pixCopyPaste = null,
         public readonly array $raw = [],
+        public readonly ?NextAction $nextAction = null,
     ) {}
 }

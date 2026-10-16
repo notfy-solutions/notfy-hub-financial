@@ -4,42 +4,29 @@ declare(strict_types=1);
 
 namespace Notfy\HubFinancial\Gateways\Asaas;
 
-use Illuminate\Contracts\Container\Container;
 use Notfy\HubFinancial\Contracts\BillingGateway;
 use Notfy\HubFinancial\Contracts\GatewayPlugin;
+use Notfy\HubFinancial\Contracts\ProvidesWebhookHandler;
+use Notfy\HubFinancial\Contracts\WebhookHandler;
 use Notfy\HubFinancial\Credentials\ApiKey;
 use Notfy\HubFinancial\Support\GatewayAccount;
-use Notfy\HubFinancial\Support\HubFinancialConfig;
 use Notfy\HubFinancial\Webhooks\AsaasWebhookParser;
 
-final class AsaasPlugin implements GatewayPlugin
+final class AsaasPlugin implements GatewayPlugin, ProvidesWebhookHandler
 {
-    public function __construct(private readonly Container $container) {}
-
     public function name(): string
     {
         return 'asaas';
     }
 
-    public function register(): void
+    public function webhookHandler(): WebhookHandler
     {
-        $this->container->singleton(AsaasHttpClient::class, function (Container $app): AsaasHttpClient {
-            $config = $app->make(HubFinancialConfig::class);
-
-            return new AsaasHttpClient(
-                apiKey: $config->gatewayOption('asaas', 'api_key'),
-                baseUrl: AsaasEnvironment::fromConfig($config->gatewayOption('asaas', 'environment'))->baseUrl(),
-            );
-        });
-
-        $this->container->singleton(
-            AsaasBillingGateway::class,
-            fn (Container $app): AsaasBillingGateway => new AsaasBillingGateway($app->make(AsaasHttpClient::class)),
-        );
-
-        $this->container->singleton(AsaasWebhookParser::class);
+        return new AsaasWebhookParser;
     }
 
+    /**
+     * Opções da conta: `environment` (`production`|`sandbox`, padrão sandbox).
+     */
     public function build(GatewayAccount $account): BillingGateway
     {
         $key = $account->credentials instanceof ApiKey ? $account->credentials->key : '';

@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use Notfy\HubFinancial\Domain\Enums\ChargeStatus;
+use Notfy\HubFinancial\Domain\Enums\NextActionType;
 use Notfy\HubFinancial\Domain\Enums\PaymentMethod;
 use Notfy\HubFinancial\DTO\ChargeInput;
 use Notfy\HubFinancial\DTO\CustomerInput;
@@ -442,4 +443,29 @@ it('sends the address and document type of an international customer', function 
         'state' => 'CA',
         'postal_code' => '94105',
     ])->and($params['metadata']['document_type'])->toBe('ein');
+});
+
+it('exposes a generic NextAction for redirect, 3DS, qr and voucher flows', function (string $type, array $body, NextActionType $expected, ?string $url) {
+    stripeHttpFake()->queueResponse('get', '/v1/payment_intents/pi_na', [
+        'id' => 'pi_na',
+        'object' => 'payment_intent',
+        'status' => 'requires_action',
+        'next_action' => ['type' => $type] + $body,
+    ]);
+
+    $action = stripeGateway()->fetchCharge('pi_na')->nextAction;
+
+    expect($action->type)->toBe($expected)->and($action->url)->toBe($url);
+})->with([
+    'ideal/bancontact redirect' => ['redirect_to_url', ['redirect_to_url' => ['url' => 'https://bank/redirect']], NextActionType::Redirect, 'https://bank/redirect'],
+    '3ds sdk' => ['use_stripe_sdk', ['use_stripe_sdk' => ['type' => 'three_d_secure_redirect']], NextActionType::ThreeDSecure, null],
+    'qr code' => ['pix_display_qr_code', ['pix_display_qr_code' => ['data' => 'x']], NextActionType::QrCode, null],
+    'voucher' => ['oxxo_display_details', ['oxxo_display_details' => ['number' => '1']], NextActionType::Voucher, null],
+    'other' => ['verify_with_microdeposits', [], NextActionType::Other, null],
+]);
+
+it('has no NextAction when the payment intent needs none', function () {
+    stripeHttpFake()->queueResponse('get', '/v1/payment_intents/pi_ok', ['id' => 'pi_ok', 'object' => 'payment_intent', 'status' => 'succeeded']);
+
+    expect(stripeGateway()->fetchCharge('pi_ok')->nextAction)->toBeNull();
 });

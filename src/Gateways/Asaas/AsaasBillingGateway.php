@@ -137,7 +137,7 @@ final class AsaasBillingGateway implements BillingGateway, SubscriptionGateway
             'customer' => $input->customerExternalId,
             'billingType' => $input->paymentMethod->value,
             'value' => round($input->amountCents / 100, 2),
-            'dueDate' => $input->dueDate,
+            'dueDate' => $input->dueDate ?? gmdate('Y-m-d'),
             'description' => $input->description,
             'externalReference' => $input->externalReference,
             'creditCardToken' => $input->cardToken,

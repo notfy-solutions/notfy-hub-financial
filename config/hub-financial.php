@@ -2,45 +2,10 @@
 
 declare(strict_types=1);
 
-use Notfy\HubFinancial\Gateways\Asaas\AsaasBillingGateway;
 use Notfy\HubFinancial\Gateways\Asaas\AsaasPlugin;
-use Notfy\HubFinancial\Gateways\Stripe\StripeBillingGateway;
 use Notfy\HubFinancial\Gateways\Stripe\StripePlugin;
 
 return [
-    /*
-    |--------------------------------------------------------------------------
-    | Gateway padrão
-    |--------------------------------------------------------------------------
-    */
-    'default' => env('HUB_FINANCIAL_GATEWAY', 'asaas'),
-
-    /*
-    |--------------------------------------------------------------------------
-    | Gateways disponíveis
-    |--------------------------------------------------------------------------
-    | Cada entrada precisa de uma 'class' que implemente BillingGateway.
-    */
-    'gateways' => [
-        'asaas' => [
-            'class' => AsaasBillingGateway::class,
-            'api_key' => env('ASAAS_API_KEY'),
-            'environment' => env('ASAAS_ENVIRONMENT', 'sandbox'),
-            'webhook_auth_token' => env('ASAAS_WEBHOOK_TOKEN'),
-        ],
-        'stripe' => [
-            'class' => StripeBillingGateway::class,
-            'secret_key' => env('STRIPE_SECRET_KEY'),
-            // Deixe em branco em produção: o SDK já usa a API oficial do
-            // Stripe por padrão. Só defina para apontar pra um servidor de
-            // testes (ex.: stripe-mock) — o SDK anexa "/v1" sozinho, então
-            // não inclua o sufixo aqui.
-            'base_url' => env('STRIPE_API_URL'),
-            'webhook_secret' => env('STRIPE_WEBHOOK_SECRET'),
-            'default_currency' => env('STRIPE_DEFAULT_CURRENCY', 'usd'),
-        ],
-    ],
-
     /*
     |--------------------------------------------------------------------------
     | Plugins de gateway
@@ -63,5 +28,31 @@ return [
     'routing' => [
         'BR' => ['default' => 'asaas'],
         '*' => ['default' => 'stripe'],
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Resiliência
+    |--------------------------------------------------------------------------
+    | Usada por ResilientGatewayFactory::wrap(). Leituras fazem retry em falha
+    | transitória; escritas só em 429 (evita cobrança duplicada). O circuit
+    | breaker abre após N falhas transitórias seguidas e fecha após o cooldown.
+    */
+    'resilience' => [
+        'max_attempts' => 3,
+        'base_delay_ms' => 200,
+        'max_delay_ms' => 5000,
+        'failure_threshold' => 5,
+        'cooldown_seconds' => 30,
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Webhooks
+    |--------------------------------------------------------------------------
+    | dedupe_ttl: por quanto tempo (s) lembrar eventIds já processados.
+    */
+    'webhooks' => [
+        'dedupe_ttl' => 604800,
     ],
 ];

@@ -7,19 +7,17 @@ namespace Notfy\HubFinancial\Contracts;
 use Notfy\HubFinancial\Support\GatewayAccount;
 
 /**
- * Ponto único de integração de um provedor de cobrança com o pacote. O
- * ServiceProvider conhece apenas esta interface: adicionar um provedor (ou
- * país) é criar um plugin e listá-lo em `hub-financial.plugins`, sem editar
- * o provider.
+ * Ponto único de integração de um provedor de cobrança com o pacote.
+ * Adicionar um provedor (ou país) é criar um plugin e listá-lo em
+ * `hub-financial.plugins`, sem editar o ServiceProvider.
+ *
+ * Plugins não leem credenciais: recebem tudo em GatewayAccount.
  */
 interface GatewayPlugin
 {
-    /** Chave do driver, igual à usada em `hub-financial.gateways` e em GatewayAccount::$provider. */
+    /** Chave do driver, igual a GatewayAccount::$provider. */
     public function name(): string;
 
-    /** Registra no container os bindings da conta padrão da aplicação (config). */
-    public function register(): void;
-
-    /** Constrói o gateway para uma conta com credenciais de qualquer origem (BYO key, banco por tenant). */
+    /** Constrói o gateway para uma conta, com credenciais de qualquer origem. */
     public function build(GatewayAccount $account): BillingGateway;
 }

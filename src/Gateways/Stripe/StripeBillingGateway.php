@@ -7,11 +7,13 @@ namespace Notfy\HubFinancial\Gateways\Stripe;
 use Notfy\HubFinancial\Contracts\BillingGateway;
 use Notfy\HubFinancial\Domain\Enums\Capability;
 use Notfy\HubFinancial\Domain\Enums\ChargeStatus;
+use Notfy\HubFinancial\Domain\Enums\NextActionType;
 use Notfy\HubFinancial\Domain\Enums\PaymentMethod;
 use Notfy\HubFinancial\DTO\ChargeInput;
 use Notfy\HubFinancial\DTO\ChargeResult;
 use Notfy\HubFinancial\DTO\CustomerInput;
 use Notfy\HubFinancial\DTO\CustomerResult;
+use Notfy\HubFinancial\DTO\NextAction;
 use Notfy\HubFinancial\Exceptions\StripeApiException;
 use Notfy\HubFinancial\Support\ApiPayload;
 use Stripe\Exception\ApiErrorException;
@@ -27,8 +29,7 @@ use Stripe\StripeClient;
  * esta classe.
  *
  * A moeda vem de `ChargeInput::$currency` (ISO 4217); quando ausente, usa
- * `extra['currency']` e, por fim, `$defaultCurrency` (config
- * `hub-financial.gateways.stripe.default_currency`).
+ * `extra['currency']` e, por fim, `$defaultCurrency` (opção `default_currency` da conta).
  *
  * Aliases abaixo espelham (só para os campos que esta classe efetivamente
  * monta) os array-shapes reais que `stripe/stripe-php` declara via docblock
@@ -340,6 +341,35 @@ final class StripeBillingGateway implements BillingGateway
             bankSlipUrl: $nextAction['bankSlipUrl'],
             pixCopyPaste: $nextAction['pixCopyPaste'],
             raw: $paymentIntent,
+            nextAction: $this->toNextAction($paymentIntent),
+        );
+    }
+
+    /**
+     * @param  array<string, mixed>  $paymentIntent
+     */
+    private function toNextAction(array $paymentIntent): ?NextAction
+    {
+        $action = ApiPayload::toAssocArray($paymentIntent['next_action'] ?? null);
+        $type = ApiPayload::optionalString($action['type'] ?? null);
+
+        if ($type === null) {
+            return null;
+        }
+
+        $redirect = ApiPayload::toAssocArray($action['redirect_to_url'] ?? null);
+        $details = ApiPayload::toAssocArray($action[$type] ?? null);
+
+        return new NextAction(
+            type: match (true) {
+                $type === 'redirect_to_url' => NextActionType::Redirect,
+                str_starts_with($type, 'use_stripe_sdk') => NextActionType::ThreeDSecure,
+                str_contains($type, 'qr') => NextActionType::QrCode,
+                str_contains($type, 'voucher') || str_contains($type, 'display_details') => NextActionType::Voucher,
+                default => NextActionType::Other,
+            },
+            url: ApiPayload::optionalString($redirect['url'] ?? null),
+            data: $details,
         );
     }
 

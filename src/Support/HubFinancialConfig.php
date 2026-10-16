@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace Notfy\HubFinancial\Support;
 
 use Illuminate\Contracts\Config\Repository;
-use Notfy\HubFinancial\Contracts\BillingGateway;
 use Notfy\HubFinancial\Contracts\GatewayPlugin;
 
 /**
@@ -33,24 +32,6 @@ final readonly class HubFinancialConfig
     }
 
     /**
-     * @return array<string, array{class: class-string<BillingGateway>}>
-     */
-    public function gateways(): array
-    {
-        $gateways = [];
-
-        foreach (ApiPayload::toAssocArray($this->config->get('hub-financial.gateways', [])) as $name => $options) {
-            $class = ApiPayload::toAssocArray($options)['class'] ?? null;
-
-            if (is_string($class) && is_a($class, BillingGateway::class, true)) {
-                $gateways[$name] = ['class' => $class];
-            }
-        }
-
-        return $gateways;
-    }
-
-    /**
      * @return array<string, array<string, string>> país => (tipo => nome do gateway)
      */
     public function routing(): array
@@ -68,10 +49,26 @@ final readonly class HubFinancialConfig
         return $routing;
     }
 
-    public function gatewayOption(string $gateway, string $key): string
+    public function webhookDedupeTtl(): int
     {
-        $options = ApiPayload::toAssocArray($this->config->get("hub-financial.gateways.{$gateway}", []));
+        return max(60, ApiPayload::toInt($this->config->get('hub-financial.webhooks.dedupe_ttl', 604800)));
+    }
 
-        return ApiPayload::stringOrDefault($options[$key] ?? null, '');
+    /**
+     * @return array{max_attempts: int, base_delay_ms: int, max_delay_ms: int, failure_threshold: int, cooldown_seconds: int}
+     */
+    public function resilience(): array
+    {
+        $get = fn (string $key, int $default): int => max(1, ApiPayload::toInt(
+            $this->config->get("hub-financial.resilience.{$key}", $default),
+        ));
+
+        return [
+            'max_attempts' => $get('max_attempts', 3),
+            'base_delay_ms' => $get('base_delay_ms', 200),
+            'max_delay_ms' => $get('max_delay_ms', 5000),
+            'failure_threshold' => $get('failure_threshold', 5),
+            'cooldown_seconds' => $get('cooldown_seconds', 30),
+        ];
     }
 }

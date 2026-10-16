@@ -4,15 +4,20 @@ declare(strict_types=1);
 
 namespace Notfy\HubFinancial;
 
+use Illuminate\Contracts\Cache\Factory as CacheFactory;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Contracts\Container\Container;
+use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Support\ServiceProvider;
-use Notfy\HubFinancial\Contracts\BillingGateway;
 use Notfy\HubFinancial\Contracts\GatewayPlugin;
-use Notfy\HubFinancial\Support\DefaultGatewayResolver;
+use Notfy\HubFinancial\Contracts\ProvidesWebhookHandler;
+use Notfy\HubFinancial\Resilience\CircuitBreaker;
+use Notfy\HubFinancial\Resilience\ResilientGatewayFactory;
+use Notfy\HubFinancial\Resilience\RetryPolicy;
 use Notfy\HubFinancial\Support\GatewayManager;
 use Notfy\HubFinancial\Support\GatewayResolver;
 use Notfy\HubFinancial\Support\HubFinancialConfig;
+use Notfy\HubFinancial\Webhooks\WebhookRouter;
 
 /**
  * Apenas orquestra: cada provedor se registra sozinho por um GatewayPlugin
@@ -28,10 +33,6 @@ final class HubFinancialServiceProvider extends ServiceProvider
 
         $plugins = $this->plugins();
 
-        foreach ($plugins as $plugin) {
-            $plugin->register();
-        }
-
         $this->app->singleton(GatewayManager::class, function () use ($plugins): GatewayManager {
             $manager = new GatewayManager;
 
@@ -42,15 +43,41 @@ final class HubFinancialServiceProvider extends ServiceProvider
             return $manager;
         });
 
-        $this->app->singleton(GatewayResolver::class, fn (Container $app): GatewayResolver => new DefaultGatewayResolver(
-            gateways: $app->make(HubFinancialConfig::class)->gateways(),
-            routing: $app->make(HubFinancialConfig::class)->routing(),
-        ));
+        $this->app->singleton(WebhookRouter::class, function (Container $app) use ($plugins): WebhookRouter {
+            $config = $app->make(HubFinancialConfig::class);
+            $router = new WebhookRouter(
+                $app->make(CacheFactory::class)->store(),
+                $app->make(Dispatcher::class),
+                $config->webhookDedupeTtl(),
+            );
 
-        $this->app->singleton(
-            BillingGateway::class,
-            fn (Container $app): BillingGateway => $app->make(GatewayResolver::class)->resolve(),
-        );
+            foreach ($plugins as $plugin) {
+                if ($plugin instanceof ProvidesWebhookHandler) {
+                    $router->register($plugin->name(), $plugin->webhookHandler());
+                }
+            }
+
+            return $router;
+        });
+
+        $this->app->singleton(ResilientGatewayFactory::class, function (Container $app): ResilientGatewayFactory {
+            $resilience = $app->make(HubFinancialConfig::class)->resilience();
+
+            return new ResilientGatewayFactory(
+                new RetryPolicy($resilience['max_attempts'], $resilience['base_delay_ms'], $resilience['max_delay_ms']),
+                new CircuitBreaker(
+                    $app->make(CacheFactory::class)->store(),
+                    $resilience['failure_threshold'],
+                    $resilience['cooldown_seconds'],
+                ),
+                $app->make(Dispatcher::class),
+            );
+        });
+
+        $this->app->singleton(GatewayResolver::class, fn (Container $app): GatewayResolver => new GatewayResolver(
+            $app->make(GatewayManager::class),
+            $app->make(HubFinancialConfig::class)->routing(),
+        ));
     }
 
     public function boot(): void

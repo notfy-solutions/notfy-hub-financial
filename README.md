@@ -42,9 +42,15 @@ Se um dia for necessário versionar/distribuir separadamente (outro time, CI iso
 - `Gateways\Asaas\*` — Brasil: Pix, boleto e cartão, via HTTP puro (`AsaasHttpClient`), só em BRL.
 - `Gateways\Stripe\*` — mundo: cartão, ACH, SEPA e outros meios, em qualquer moeda, via `stripe/stripe-php`.
 - `Gateways\Fake\FakeGateway` — gateway em memória que implementa todos os contratos (inclui extrato); serve para testes e como referência mínima de um driver novo.
-- `Support\GatewayResolver` — roteia por país/tipo de pagamento (`resolve`) e valida país, moeda, meio de pagamento e capacidade (`resolveFor`); `supportsCountry()` diz se há cobrança para o país. Padrão: Brasil → Asaas, demais países → Stripe (`config/hub-financial.php` → `routing`).
+- `Support\GatewayResolver::resolve($accounts, $context, $method, $capability)` — recebe os `GatewayAccount`s da aplicação e escolhe o gateway por preferência do contexto, roteamento (`config/hub-financial.php` → `routing`: Brasil → Asaas, demais → Stripe) e, por último, qualquer conta que atenda país, moeda, meio de pagamento e capacidade. Também expõe `supportsCountry()` e `available()`. Não lê credencial de lugar nenhum nem guarda estado entre chamadas (seguro em Octane/multi-tenant).
 - `Support\GatewayManager` + `GatewayAccount` + `Credentials\*` — constroem um driver a partir de uma conta (credencial de qualquer origem). Provedores novos entram com `extend()`.
 - `Webhooks\*Parser` — validam e normalizam webhooks (Asaas por token estático; Stripe por assinatura HMAC com tolerância contra replay) em um `PaymentEvent` agnóstico.
+
+- `Support\Money` — valor + moeda ISO 4217 ciente do expoente (JPY = 0 casas, KWD = 3). `ChargeInput::amountCents` são **unidades menores da moeda**, não necessariamente centavos; use `Money::fromDecimal()` para converter.
+- `DTO\NextAction` (`ChargeResult::$nextAction`) — passo pendente de métodos assíncronos (redirect, 3DS, voucher, QR), comum a iDEAL, OXXO, Bancontact etc. `ChargeInput::$dueDate` é opcional.
+- `Resilience\ResilientGatewayFactory::wrap($gateway, $name)` — decorator com retry/backoff (leituras em falha transitória; escritas só em 429, para nunca cobrar duas vezes), circuit breaker no cache e eventos `GatewayCallFailed`/`CircuitBreakerOpened`. Use um `$name` por conta/tenant. Config em `hub-financial.resilience`.
+- `Webhooks\WebhookRouter::handle($provider, $rawBody, $headers, $account)` — entrada única: verifica, normaliza e deduplica por `eventId`, disparando `PaymentEventReceived` uma vez. Plugins expõem o handler via `ProvidesWebhookHandler`; chame `release($event)` se o seu processamento falhar, para aceitar a reentrega.
+
 
 O pacote é agnóstico de persistência: recebe DTOs simples, fala com o gateway e devolve DTOs. Toda a gravação em banco (webhook events, payments, invoices) é responsabilidade da aplicação consumidora.
 
@@ -54,18 +60,30 @@ Cada gateway garante idempotência (exigida pelo contrato) à sua maneira: o Asa
 
 1. **Implemente o driver** em `Gateways\{Provedor}\*` com `BillingGateway` (e `SubscriptionGateway`/`StatementGateway`/`WebhookHandler` se fizer sentido). Declare em `DescribesGateway` os países, moedas, meios de pagamento e capacidades **reais** do provedor; o resolvedor recusa o que não estiver ali (`UnsupportedGatewayRequestException`). Use o `FakeGateway` como esqueleto.
 2. **Mapeie o vocabulário local** para os enums universais dentro do driver (status do provedor → `ChargeStatus`; `PaymentMethod` → o tipo do provedor). Nada específico do provedor sobe para os DTOs: o que for único vai em `extra`.
-3. **Registre** o provedor: `app(GatewayManager::class)->extend('meu-provedor', fn (GatewayAccount $account) => new MeuGateway(...))` para credencial por conta, e uma entrada em `gateways`/`routing` de `config/hub-financial.php` para o gateway padrão da aplicação.
+3. **Registre** o provedor: crie um `GatewayPlugin` (`name()` + `build(GatewayAccount)`; opcionalmente `ProvidesWebhookHandler`) e liste-o em `plugins` de `config/hub-financial.php`. Se quiser roteá-lo por país, adicione-o em `routing`. Sem plugin também dá: `app(GatewayManager::class)->extend('meu-provedor', fn (GatewayAccount $account) => new MeuGateway(...))`.
 4. **Webhook**: implemente `WebhookHandler` (verificação de autenticidade + normalização em `PaymentEvent`).
 5. **Teste**: cubra cobrança, mapeamento de status e as recusas por país/moeda/meio (veja `tests/Gateways/*`).
 
 A aplicação monta o contexto a partir do cadastro do cliente (`DefaultGatewayContext::make(country: ..., currency: ...)`) e pergunta `supportsCountry()` antes de oferecer cobrança.
 
-## Uso com chave própria vs. chave de terceiro (BYO key)
+## Credenciais
 
-Os gateways recebem a credencial via construtor (`AsaasHttpClient($apiKey, $baseUrl)` / `StripeClient($apiKey)`), não leem `config()` internamente. Isso permite dois modos de uso:
+O pacote **nunca lê credencial** de `.env`, `config` ou banco: quem usa o pacote decide de onde vêm (env, banco por tenant, cofre) e entrega tudo pronto em `GatewayAccount` (`provider`, `credentials`, `webhookSecret`, `options`). Opções por provedor: Asaas `environment` (`production`|`sandbox`); Stripe `default_currency` e `base_url` (só para servidor de testes).
 
-- **Conta própria**: resolvida automaticamente pelo `HubFinancialServiceProvider` via `config/hub-financial.php` (bind no container).
-- **Conta de terceiro (BYO key)**: a aplicação consumidora instancia manualmente, ex.: `new AsaasBillingGateway(new AsaasHttpClient($team->asaas_api_key))` ou `new StripeBillingGateway(new StripeClient($team->stripe_secret_key))`, sem passar pelo container.
+```php
+$accounts = [
+    new GatewayAccount('asaas', new ApiKey($tenant->asaas_key), $tenant->asaas_token, ['environment' => 'production']),
+    new GatewayAccount('stripe', new ApiKey($tenant->stripe_key), $tenant->stripe_whsec),
+];
+
+$gateway = app(GatewayResolver::class)->resolve(
+    $accounts,
+    DefaultGatewayContext::make(country: 'DE', currency: 'EUR'),
+    PaymentMethod::SepaDebit,
+);
+
+$event = app(WebhookRouter::class)->handle('stripe', $rawBody, $headers, $accounts[1]);
+```
 
 ## Testando o gateway Stripe (SDK oficial)
 
