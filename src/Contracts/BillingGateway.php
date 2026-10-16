@@ -5,8 +5,8 @@ declare(strict_types=1);
 namespace Notfy\HubFinancial\Contracts;
 
 /**
- * Composição dos contratos segregados para compatibilidade com código existente.
- * Novos drivers podem implementar só os contratos que suportam (ChargeGateway,
- * CustomerGateway etc.) sem precisar do BillingGateway completo.
+ * Composição dos contratos segregados de cobrança. Todo BillingGateway se
+ * descreve (DescribesGateway); drivers que cobrem só uma parte (ex.: só
+ * extrato bancário) implementam apenas os contratos que suportam.
  */
-interface BillingGateway extends ChargeGateway, CheckoutGateway, CustomerGateway {}
+interface BillingGateway extends ChargeGateway, CheckoutGateway, CustomerGateway, DescribesGateway {}

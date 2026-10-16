@@ -52,4 +52,12 @@ final class GatewayManager
     {
         return isset($this->drivers[$provider]);
     }
+
+    /**
+     * @return list<string>
+     */
+    public function providers(): array
+    {
+        return array_keys($this->drivers);
+    }
 }

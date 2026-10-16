@@ -46,6 +46,9 @@ final class StripeWebhookParser implements WebhookHandler
         }
     }
 
+    /**
+     * @param  array<string, string>  $headers
+     */
     public function verify(string $rawBody, array $headers, GatewayAccount $account): bool
     {
         $signatureHeader = $headers['Stripe-Signature'] ?? $headers['stripe-signature'] ?? null;

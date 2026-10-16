@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use NunoMaduro\PhpInsights\Domain\Insights\ClassMethodAverageCyclomaticComplexityIsHigh;
 use NunoMaduro\PhpInsights\Domain\Insights\CyclomaticComplexityIsHigh;
+use NunoMaduro\PhpInsights\Domain\Insights\ForbiddenDefineFunctions;
 use NunoMaduro\PhpInsights\Domain\Insights\MethodCyclomaticComplexityIsHigh;
 use PHP_CodeSniffer\Standards\Generic\Sniffs\Commenting\TodoSniff;
 use PHP_CodeSniffer\Standards\Generic\Sniffs\Files\LineLengthSniff;
@@ -32,6 +33,10 @@ return [
     'add' => [],
 
     'remove' => [
+        // Falso positivo: o Insights confunde métodos de enum com funções
+        // globais soltas (ex.: AsaasEnvironment::baseUrl()).
+        ForbiddenDefineFunctions::class,
+
         // "Exception" and "Interface" suffixes are conventional PHP naming,
         // not a smell — renaming them would break the public API this
         // package exposes to consumers.

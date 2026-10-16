@@ -3,8 +3,11 @@
 declare(strict_types=1);
 
 use Illuminate\Support\Facades\Http;
+use Notfy\HubFinancial\Domain\Enums\ChargeStatus;
+use Notfy\HubFinancial\Domain\Enums\PaymentMethod;
 use Notfy\HubFinancial\DTO\ChargeInput;
 use Notfy\HubFinancial\DTO\CustomerInput;
+use Notfy\HubFinancial\Exceptions\UnsupportedGatewayRequestException;
 use Notfy\HubFinancial\Gateways\Asaas\AsaasBillingGateway;
 use Notfy\HubFinancial\Gateways\Asaas\AsaasHttpClient;
 
@@ -42,13 +45,13 @@ it('creates a charge and maps confirmed status', function () {
         customerExternalId: 'cus_123',
         amountCents: 10000,
         dueDate: '2026-09-01',
-        billingType: 'PIX',
+        paymentMethod: PaymentMethod::Pix,
         description: 'Assinatura mensal',
         externalReference: 'invoice-1',
     ));
 
     expect($result->externalId)->toBe('pay_123')
-        ->and($result->status)->toBe('CONFIRMED')
+        ->and($result->status)->toBe(ChargeStatus::Confirmed)
         ->and($result->invoiceUrl)->toBe('https://asaas.com/i/pay_123');
 });
 
@@ -57,13 +60,13 @@ it('maps overdue and refunded statuses', function () {
         'api-sandbox.asaas.com/v3/payments/pay_1' => Http::response(['id' => 'pay_1', 'status' => 'OVERDUE'], 200),
     ]);
 
-    expect(gateway()->fetchCharge('pay_1')->status)->toBe('OVERDUE');
+    expect(gateway()->fetchCharge('pay_1')->status)->toBe(ChargeStatus::Overdue);
 
     Http::fake([
         'api-sandbox.asaas.com/v3/payments/pay_2' => Http::response(['id' => 'pay_2', 'status' => 'PARTIALLY_REFUNDED'], 200),
     ]);
 
-    expect(gateway()->fetchCharge('pay_2')->status)->toBe('REFUNDED');
+    expect(gateway()->fetchCharge('pay_2')->status)->toBe(ChargeStatus::Refunded);
 });
 
 it('creates a recurring checkout session', function () {
@@ -113,19 +116,19 @@ it('maps deleted and unknown statuses', function () {
         'api-sandbox.asaas.com/v3/payments/pay_deleted' => Http::response(['id' => 'pay_deleted', 'status' => 'DELETED'], 200),
     ]);
 
-    expect(gateway()->fetchCharge('pay_deleted')->status)->toBe('DELETED');
+    expect(gateway()->fetchCharge('pay_deleted')->status)->toBe(ChargeStatus::Deleted);
 
     Http::fake([
         'api-sandbox.asaas.com/v3/payments/pay_received' => Http::response(['id' => 'pay_received', 'status' => 'RECEIVED_IN_CASH'], 200),
     ]);
 
-    expect(gateway()->fetchCharge('pay_received')->status)->toBe('RECEIVED');
+    expect(gateway()->fetchCharge('pay_received')->status)->toBe(ChargeStatus::Received);
 
     Http::fake([
         'api-sandbox.asaas.com/v3/payments/pay_unknown' => Http::response(['id' => 'pay_unknown', 'status' => 'AWAITING_RISK_ANALYSIS'], 200),
     ]);
 
-    expect(gateway()->fetchCharge('pay_unknown')->status)->toBe('PENDING');
+    expect(gateway()->fetchCharge('pay_unknown')->status)->toBe(ChargeStatus::Pending);
 });
 
 it('creates, updates, fetches and cancels a native subscription', function () {
@@ -277,4 +280,45 @@ it('creates a checkout session using inline customer data instead of a customer 
     Http::assertSent(fn ($request) => $request['customerData'] === ['name' => 'Fulano', 'email' => 'fulano@example.com']
         && $request['externalReference'] === 'checkout-ref-1'
         && ! array_key_exists('customer', $request->data()));
+});
+
+it('refuses a charge in a currency other than BRL before calling the API', function () {
+    Http::fake();
+
+    gateway()->createCharge(new ChargeInput(
+        customerExternalId: 'cus_1',
+        amountCents: 1000,
+        dueDate: '2026-10-20',
+        paymentMethod: PaymentMethod::Pix,
+        description: 'Cobrança',
+        externalReference: 'inv-usd',
+        currency: 'USD',
+    ));
+})->throws(UnsupportedGatewayRequestException::class, "não cobra na moeda 'USD'");
+
+it('accepts BRL case-insensitively and refuses a payment method it does not support', function () {
+    Http::fake([
+        'api-sandbox.asaas.com/v3/payments' => Http::response(['id' => 'pay_brl', 'status' => 'PENDING'], 200),
+    ]);
+
+    $result = gateway()->createCharge(new ChargeInput(
+        customerExternalId: 'cus_1',
+        amountCents: 1000,
+        dueDate: '2026-10-20',
+        paymentMethod: PaymentMethod::Pix,
+        description: 'Cobrança',
+        externalReference: 'inv-brl',
+        currency: 'brl',
+    ));
+
+    expect($result->externalId)->toBe('pay_brl');
+
+    expect(fn () => gateway()->createCharge(new ChargeInput(
+        customerExternalId: 'cus_1',
+        amountCents: 1000,
+        dueDate: '2026-10-20',
+        paymentMethod: PaymentMethod::Ach,
+        description: 'Cobrança',
+        externalReference: 'inv-ach',
+    )))->toThrow(UnsupportedGatewayRequestException::class, "meio de pagamento 'ACH'");
 });

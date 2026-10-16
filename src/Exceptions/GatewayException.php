@@ -6,7 +6,7 @@ namespace Notfy\HubFinancial\Exceptions;
 
 use RuntimeException;
 
-class GatewayException extends RuntimeException
+abstract class GatewayException extends RuntimeException
 {
     /**
      * @param  array<string, mixed>  $payload

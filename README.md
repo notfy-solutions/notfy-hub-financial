@@ -1,6 +1,6 @@
 # notfy-hub-financial
 
-Pacote Composer (Laravel 13) com a integração de gateways de pagamento (cobrança/checkout), compartilhado entre o `notfyAdmin` e (futuramente) o `notfy-app`. A emissão de nota fiscal vive em `notfy/fiscal-hub`, um pacote separado — este aqui cuida só de cobrança.
+Pacote Composer (Laravel 13) com a integração de gateways de pagamento (cobrança/checkout), compartilhado entre o `notfyAdmin` e (futuramente) o `notfy-app`. A emissão de nota fiscal vive em `notfy/hub-tax`, um pacote separado — este aqui cuida só de cobrança.
 
 ## Por que existe
 
@@ -34,16 +34,31 @@ Se um dia for necessário versionar/distribuir separadamente (outro time, CI iso
 
 ## Estrutura
 
-- `Contracts\BillingGateway` — cobrança (customer, charge, checkout, billing portal). Único contrato para qualquer gateway.
-- `Gateways\Asaas\*` — implementação Asaas do contrato (Brasil: pix/boleto/cartão), via HTTP puro (`AsaasHttpClient`) — a Asaas não mantém um SDK PHP oficial.
-- `Gateways\Stripe\*` — implementação Stripe do contrato (cartão internacional), via `stripe/stripe-php` (SDK oficial). Diferente do Asaas, o Stripe mantém e testa esse cliente — não faz sentido reimplementar serialização/erros/retries na mão.
-- `Support\GatewayResolver` — resolve o gateway certo por preferência do cliente ou por país/tipo de pagamento. Roteamento padrão: Brasil → Asaas, qualquer outro país → Stripe (`config/hub-financial.php` → `routing`).
-- `Webhooks\AsaasWebhookParser` — valida (token estático) e normaliza webhooks recebidos do Asaas.
-- `Webhooks\StripeWebhookParser` — valida (via `Stripe\Webhook::constructEvent()`, HMAC-SHA256 do header `Stripe-Signature` com janela de tolerância contra replay) e normaliza webhooks recebidos do Stripe.
+- `Contracts\BillingGateway` — cobrança (customer, charge, checkout, billing portal) **e** descrição do gateway (`DescribesGateway`). É composição de contratos menores (`ChargeGateway`, `CustomerGateway`, `CheckoutGateway`); drivers que cobrem só uma parte implementam só o que suportam.
+- `Contracts\DescribesGateway` — todo gateway declara `capabilities()`, `supportedCountries()`, `supportedCurrencies()` e `supportedPaymentMethods()` (`'*'` atende qualquer país/moeda). É o que permite escolher um provedor que atenda o pedido.
+- `Contracts\StatementGateway` — extrato e saldo de conta bancária (`fetchStatement`, `fetchBalance`), base da conciliação, independente de OFX, CNAB, Open Banking ou API de banco.
+- `Domain\Enums\{PaymentMethod, ChargeStatus, Capability, ...}` — vocabulário universal: meios locais (Boleto, Pix) e internacionais (cartão, ACH, débito SEPA, transferência, carteira).
+- `DTO\ChargeInput` / `ChargeResult` / `CustomerInput` — dados tipados e agnósticos de país (moeda ISO 4217 na cobrança; país, tipo de documento e endereço no cliente).
+- `Gateways\Asaas\*` — Brasil: Pix, boleto e cartão, via HTTP puro (`AsaasHttpClient`), só em BRL.
+- `Gateways\Stripe\*` — mundo: cartão, ACH, SEPA e outros meios, em qualquer moeda, via `stripe/stripe-php`.
+- `Gateways\Fake\FakeGateway` — gateway em memória que implementa todos os contratos (inclui extrato); serve para testes e como referência mínima de um driver novo.
+- `Support\GatewayResolver` — roteia por país/tipo de pagamento (`resolve`) e valida país, moeda, meio de pagamento e capacidade (`resolveFor`); `supportsCountry()` diz se há cobrança para o país. Padrão: Brasil → Asaas, demais países → Stripe (`config/hub-financial.php` → `routing`).
+- `Support\GatewayManager` + `GatewayAccount` + `Credentials\*` — constroem um driver a partir de uma conta (credencial de qualquer origem). Provedores novos entram com `extend()`.
+- `Webhooks\*Parser` — validam e normalizam webhooks (Asaas por token estático; Stripe por assinatura HMAC com tolerância contra replay) em um `PaymentEvent` agnóstico.
 
 O pacote é agnóstico de persistência: recebe DTOs simples, fala com o gateway e devolve DTOs. Toda a gravação em banco (webhook events, payments, invoices) é responsabilidade da aplicação consumidora.
 
-Cada gateway garante idempotência (exigida pelo contrato `BillingGateway`) à sua maneira: o Asaas deduplica pelo campo `externalReference` no próprio payload; o Stripe usa o header `Idempotency-Key` (via `RequestOptions` do SDK), derivado do `externalReference` do DTO.
+Cada gateway garante idempotência (exigida pelo contrato) à sua maneira: o Asaas deduplica pelo `externalReference` no payload; o Stripe usa o header `Idempotency-Key`, derivado do `externalReference` do DTO.
+
+## Adicionando um país ou provedor
+
+1. **Implemente o driver** em `Gateways\{Provedor}\*` com `BillingGateway` (e `SubscriptionGateway`/`StatementGateway`/`WebhookHandler` se fizer sentido). Declare em `DescribesGateway` os países, moedas, meios de pagamento e capacidades **reais** do provedor; o resolvedor recusa o que não estiver ali (`UnsupportedGatewayRequestException`). Use o `FakeGateway` como esqueleto.
+2. **Mapeie o vocabulário local** para os enums universais dentro do driver (status do provedor → `ChargeStatus`; `PaymentMethod` → o tipo do provedor). Nada específico do provedor sobe para os DTOs: o que for único vai em `extra`.
+3. **Registre** o provedor: `app(GatewayManager::class)->extend('meu-provedor', fn (GatewayAccount $account) => new MeuGateway(...))` para credencial por conta, e uma entrada em `gateways`/`routing` de `config/hub-financial.php` para o gateway padrão da aplicação.
+4. **Webhook**: implemente `WebhookHandler` (verificação de autenticidade + normalização em `PaymentEvent`).
+5. **Teste**: cubra cobrança, mapeamento de status e as recusas por país/moeda/meio (veja `tests/Gateways/*`).
+
+A aplicação monta o contexto a partir do cadastro do cliente (`DefaultGatewayContext::make(country: ..., currency: ...)`) e pergunta `supportsCountry()` antes de oferecer cobrança.
 
 ## Uso com chave própria vs. chave de terceiro (BYO key)
 

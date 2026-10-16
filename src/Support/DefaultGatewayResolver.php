@@ -6,6 +6,9 @@ namespace Notfy\HubFinancial\Support;
 
 use InvalidArgumentException;
 use Notfy\HubFinancial\Contracts\BillingGateway;
+use Notfy\HubFinancial\Domain\Enums\Capability;
+use Notfy\HubFinancial\Domain\Enums\PaymentMethod;
+use Notfy\HubFinancial\Exceptions\UnsupportedGatewayRequestException;
 
 /**
  * Resolve qual BillingGateway usar com base na preferência do cliente ou em
@@ -49,6 +52,36 @@ final class DefaultGatewayResolver implements GatewayResolver
         return $this->getGateway($gatewayName);
     }
 
+    public function resolveFor(
+        ?GatewayContext $context = null,
+        ?PaymentMethod $method = null,
+        ?Capability $capability = null,
+    ): BillingGateway {
+        $context ??= DefaultGatewayContext::make();
+        $gateway = $this->resolve($context);
+        $name = $gateway::class;
+
+        if (! self::servesCountry($gateway, $context->getCountry())) {
+            throw UnsupportedGatewayRequestException::forCountry($context->getCountry(), $name);
+        }
+
+        $currency = $context->getCurrency();
+
+        if ($currency !== null && ! self::servesCurrency($gateway, $currency)) {
+            throw UnsupportedGatewayRequestException::forCurrency(strtoupper($currency), $name);
+        }
+
+        if ($method !== null && ! in_array($method, $gateway->supportedPaymentMethods(), true)) {
+            throw UnsupportedGatewayRequestException::forPaymentMethod($method, $name);
+        }
+
+        if ($capability !== null && ! in_array($capability, $gateway->capabilities(), true)) {
+            throw UnsupportedGatewayRequestException::forCapability($capability, $name);
+        }
+
+        return $gateway;
+    }
+
     /**
      * @return array<int, BillingGateway>
      */
@@ -59,12 +92,35 @@ final class DefaultGatewayResolver implements GatewayResolver
 
         foreach (array_keys($this->gateways) as $name) {
             $instance = $this->getGateway($name);
-            if ($instance !== $primary) {
+
+            if ($instance !== $primary && self::servesCountry($instance, $context->getCountry())) {
                 $gateways[] = $instance;
             }
         }
 
         return $gateways;
+    }
+
+    public function supportsCountry(string $country): bool
+    {
+        $routing = $this->routing[$country] ?? $this->routing['*'] ?? [];
+        $name = $routing['default'] ?? array_key_first($this->gateways);
+
+        return $name !== null && $this->hasGateway($name);
+    }
+
+    private static function servesCountry(BillingGateway $gateway, string $country): bool
+    {
+        $countries = $gateway->supportedCountries();
+
+        return in_array($country, $countries, true) || in_array('*', $countries, true);
+    }
+
+    private static function servesCurrency(BillingGateway $gateway, string $currency): bool
+    {
+        $currencies = $gateway->supportedCurrencies();
+
+        return in_array(strtoupper($currency), $currencies, true) || in_array('*', $currencies, true);
     }
 
     private function getGateway(string $name): BillingGateway

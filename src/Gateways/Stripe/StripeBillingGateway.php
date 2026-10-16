@@ -5,6 +5,9 @@ declare(strict_types=1);
 namespace Notfy\HubFinancial\Gateways\Stripe;
 
 use Notfy\HubFinancial\Contracts\BillingGateway;
+use Notfy\HubFinancial\Domain\Enums\Capability;
+use Notfy\HubFinancial\Domain\Enums\ChargeStatus;
+use Notfy\HubFinancial\Domain\Enums\PaymentMethod;
 use Notfy\HubFinancial\DTO\ChargeInput;
 use Notfy\HubFinancial\DTO\ChargeResult;
 use Notfy\HubFinancial\DTO\CustomerInput;
@@ -23,9 +26,9 @@ use Stripe\StripeClient;
  * dos dois usar é o GatewayResolver, por país/preferência do cliente, nunca
  * esta classe.
  *
- * `extra` do ChargeInput aceita `currency` (ISO 4217, ex.: "usd", "eur");
- * quando ausente, usa `$defaultCurrency` (config `hub-financial.gateways.
- * stripe.default_currency`).
+ * A moeda vem de `ChargeInput::$currency` (ISO 4217); quando ausente, usa
+ * `extra['currency']` e, por fim, `$defaultCurrency` (config
+ * `hub-financial.gateways.stripe.default_currency`).
  *
  * Aliases abaixo espelham (só para os campos que esta classe efetivamente
  * monta) os array-shapes reais que `stripe/stripe-php` declara via docblock
@@ -34,8 +37,12 @@ use Stripe\StripeClient;
  * payload filtrado por `filter()` (que remove null/''/[] e torna toda chave
  * potencialmente ausente) sempre satisfaz o contrato real do SDK.
  *
+ * @phpstan-type CustomerAddress array{
+ *     country?: string, line1?: string, city?: string, state?: string, postal_code?: string
+ * }
  * @phpstan-type CustomerPayload array{
- *     name?: string, email?: string, phone?: string, metadata?: array<string, string>
+ *     name?: string, email?: string, phone?: string, address?: CustomerAddress,
+ *     metadata?: array<string, string>
  * }
  * @phpstan-type ChargePayload array{
  *     amount: int, currency: string, customer?: string, description?: string,
@@ -60,6 +67,56 @@ final class StripeBillingGateway implements BillingGateway
         private readonly StripeClient $client,
         private readonly string $defaultCurrency = 'usd',
     ) {}
+
+    /**
+     * @return list<Capability>
+     */
+    public function capabilities(): array
+    {
+        return [
+            Capability::Card,
+            Capability::BankSlip,
+            Capability::Pix,
+            Capability::Ach,
+            Capability::SepaDebit,
+            Capability::Checkout,
+            Capability::BillingPortal,
+            Capability::MultiCurrency,
+            Capability::Refund,
+            Capability::Webhook,
+        ];
+    }
+
+    /**
+     * @return list<string>
+     */
+    public function supportedCountries(): array
+    {
+        return ['*'];
+    }
+
+    /**
+     * @return list<string>
+     */
+    public function supportedCurrencies(): array
+    {
+        return ['*'];
+    }
+
+    /**
+     * @return list<PaymentMethod>
+     */
+    public function supportedPaymentMethods(): array
+    {
+        return [
+            PaymentMethod::Card,
+            PaymentMethod::Boleto,
+            PaymentMethod::Pix,
+            PaymentMethod::Ach,
+            PaymentMethod::SepaDebit,
+            PaymentMethod::Undefined,
+        ];
+    }
 
     public function createCustomer(CustomerInput $input): CustomerResult
     {
@@ -106,16 +163,20 @@ final class StripeBillingGateway implements BillingGateway
     {
         $hasPaymentMethod = $input->cardToken !== null && $input->cardToken !== '';
 
+        $currency = strtolower(
+            $input->currency ?? ApiPayload::stringOrDefault($input->extra['currency'] ?? null, $this->defaultCurrency)
+        );
+
         $payload = array_merge($this->filter([
             'amount' => $input->amountCents,
-            'currency' => ApiPayload::stringOrDefault($input->extra['currency'] ?? null, $this->defaultCurrency),
+            'currency' => $currency,
             'customer' => $input->customerExternalId,
             'description' => $input->description,
-            'payment_method_types' => $this->paymentMethodTypes($input->billingType),
+            'payment_method_types' => $this->paymentMethodTypes($input->paymentMethod),
             'payment_method' => $input->cardToken,
             'confirm' => $hasPaymentMethod ? true : null,
             'metadata' => $this->filter([
-                'billing_type' => $input->billingType,
+                'billing_type' => $input->paymentMethod->value,
                 'due_date' => $input->dueDate,
                 'external_reference' => $input->externalReference,
             ]),
@@ -248,8 +309,16 @@ final class StripeBillingGateway implements BillingGateway
             'name' => $input->name,
             'email' => $input->email,
             'phone' => $input->phone,
+            'address' => $this->filter([
+                'country' => $input->country,
+                'line1' => $input->addressLine,
+                'city' => $input->city,
+                'state' => $input->state,
+                'postal_code' => $input->postalCode,
+            ]),
             'metadata' => $this->filter([
                 'document' => $input->document,
+                'document_type' => $input->documentType,
                 'external_reference' => $input->externalReference,
             ]),
         ]);
@@ -295,25 +364,26 @@ final class StripeBillingGateway implements BillingGateway
         ];
     }
 
-    private function mapStatus(string $stripeStatus): string
+    private function mapStatus(string $stripeStatus): ChargeStatus
     {
         return match ($stripeStatus) {
-            'succeeded' => 'RECEIVED',
-            'requires_capture' => 'CONFIRMED',
-            'canceled' => 'DELETED',
-            'processing', 'requires_action', 'requires_confirmation', 'requires_payment_method' => 'PENDING',
-            default => 'PENDING',
+            'succeeded' => ChargeStatus::Received,
+            'requires_capture' => ChargeStatus::Confirmed,
+            'canceled' => ChargeStatus::Deleted,
+            default => ChargeStatus::Pending,
         };
     }
 
     /**
      * @return list<string>
      */
-    private function paymentMethodTypes(string $billingType): array
+    private function paymentMethodTypes(PaymentMethod $method): array
     {
-        return match ($billingType) {
-            'BOLETO' => ['boleto'],
-            'PIX' => ['pix'],
+        return match ($method) {
+            PaymentMethod::Boleto => ['boleto'],
+            PaymentMethod::Pix => ['pix'],
+            PaymentMethod::Ach => ['us_bank_account'],
+            PaymentMethod::SepaDebit => ['sepa_debit'],
             default => ['card'],
         };
     }

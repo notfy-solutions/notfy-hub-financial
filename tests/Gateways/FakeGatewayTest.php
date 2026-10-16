@@ -3,7 +3,9 @@
 declare(strict_types=1);
 
 use Notfy\HubFinancial\Credentials\ApiKey;
+use Notfy\HubFinancial\Domain\Enums\ChargeStatus;
 use Notfy\HubFinancial\Domain\Enums\PaymentEventType;
+use Notfy\HubFinancial\Domain\Enums\PaymentMethod;
 use Notfy\HubFinancial\DTO\ChargeInput;
 use Notfy\HubFinancial\DTO\CustomerInput;
 use Notfy\HubFinancial\Gateways\Fake\FakeGateway;
@@ -21,7 +23,7 @@ function chargeInput(string $ref = 'inv-1'): ChargeInput
         customerExternalId: 'cus_1',
         amountCents: 5000,
         dueDate: '2026-09-01',
-        billingType: 'PIX',
+        paymentMethod: PaymentMethod::Pix,
         description: 'Cobrança',
         externalReference: $ref,
     );
@@ -61,19 +63,19 @@ it('creates a charge with PENDING status', function () {
     $result = fakeGateway()->createCharge(chargeInput('inv-1'));
 
     expect($result->externalId)->toBe('fake_pay_inv-1')
-        ->and($result->status)->toBe('PENDING');
+        ->and($result->status)->toBe(ChargeStatus::Pending);
 });
 
 it('fetches a charge and returns its current status', function () {
     $gw = fakeGateway();
     $gw->createCharge(chargeInput('inv-2'));
-    $gw->forceChargeStatus('fake_pay_inv-2', 'CONFIRMED');
+    $gw->forceChargeStatus('fake_pay_inv-2', ChargeStatus::Confirmed);
 
-    expect($gw->fetchCharge('fake_pay_inv-2')->status)->toBe('CONFIRMED');
+    expect($gw->fetchCharge('fake_pay_inv-2')->status)->toBe(ChargeStatus::Confirmed);
 });
 
 it('fetches a non-existent charge and returns PENDING', function () {
-    expect(fakeGateway()->fetchCharge('missing')->status)->toBe('PENDING');
+    expect(fakeGateway()->fetchCharge('missing')->status)->toBe(ChargeStatus::Pending);
 });
 
 it('refunds a charge and sets its status to REFUNDED', function () {
@@ -81,7 +83,7 @@ it('refunds a charge and sets its status to REFUNDED', function () {
     $gw->createCharge(chargeInput('inv-3'));
 
     expect($gw->refundCharge('fake_pay_inv-3'))->toBeTrue()
-        ->and($gw->fetchCharge('fake_pay_inv-3')->status)->toBe('REFUNDED');
+        ->and($gw->fetchCharge('fake_pay_inv-3')->status)->toBe(ChargeStatus::Refunded);
 });
 
 it('refunds a charge partially', function () {
@@ -96,7 +98,7 @@ it('cancels a charge and sets its status to DELETED', function () {
     $gw->createCharge(chargeInput('inv-5'));
 
     expect($gw->cancelCharge('fake_pay_inv-5'))->toBeTrue()
-        ->and($gw->fetchCharge('fake_pay_inv-5')->status)->toBe('DELETED');
+        ->and($gw->fetchCharge('fake_pay_inv-5')->status)->toBe(ChargeStatus::Deleted);
 });
 
 it('getCharges() returns all created charges', function () {
@@ -194,14 +196,69 @@ it('normalize() handles payload without id', function () {
 it('forceChargeStatus() overrides the status of an existing charge', function () {
     $gw = fakeGateway();
     $gw->createCharge(chargeInput('inv-f'));
-    $gw->forceChargeStatus('fake_pay_inv-f', 'OVERDUE');
+    $gw->forceChargeStatus('fake_pay_inv-f', ChargeStatus::Overdue);
 
-    expect($gw->fetchCharge('fake_pay_inv-f')->status)->toBe('OVERDUE');
+    expect($gw->fetchCharge('fake_pay_inv-f')->status)->toBe(ChargeStatus::Overdue);
 });
 
 it('forceChargeStatus() does nothing for a non-existent charge', function () {
     $gw = fakeGateway();
-    $gw->forceChargeStatus('missing', 'OVERDUE');
+    $gw->forceChargeStatus('missing', ChargeStatus::Overdue);
 
-    expect($gw->fetchCharge('missing')->status)->toBe('PENDING');
+    expect($gw->fetchCharge('missing')->status)->toBe(ChargeStatus::Pending);
+});
+
+// ─── StatementGateway ────────────────────────────────────────────────────────
+
+use Notfy\HubFinancial\Domain\Enums\StatementEntryType;
+use Notfy\HubFinancial\DTO\StatementEntry;
+use Notfy\HubFinancial\DTO\StatementQuery;
+
+it('returns the seeded statement entries inside the requested period and the balance', function () {
+    $gw = fakeGateway();
+    $gw->seedStatement([
+        new StatementEntry('e1', StatementEntryType::Credit, 10000, 'USD', '2026-10-01', 'Payment received', 'inv-1'),
+        new StatementEntry('e2', StatementEntryType::Debit, 2500, 'USD', '2026-10-15', 'Bank fee'),
+        new StatementEntry('e3', StatementEntryType::Credit, 5000, 'USD', '2026-11-02', 'Next month'),
+    ], 7500, 'USD');
+
+    $entries = $gw->fetchStatement(new StatementQuery('2026-10-01', '2026-10-31'));
+    $balance = $gw->fetchBalance();
+
+    expect($entries)->toHaveCount(2)
+        ->and($entries[0]->type)->toBe(StatementEntryType::Credit)
+        ->and($entries[0]->reference)->toBe('inv-1')
+        ->and($entries[1]->amountCents)->toBe(2500)
+        ->and($balance->availableCents)->toBe(7500)
+        ->and($balance->currency)->toBe('USD')
+        ->and($balance->pendingCents)->toBeNull();
+});
+
+it('starts with an empty statement and a zero balance', function () {
+    $gw = fakeGateway();
+
+    expect($gw->fetchStatement(new StatementQuery('2026-01-01', '2026-12-31', 'acc-1')))->toBe([])
+        ->and($gw->fetchBalance('acc-1')->availableCents)->toBe(0);
+});
+
+it('carries the international customer fields through the charge flow', function () {
+    $gw = fakeGateway();
+
+    $result = $gw->createCustomer(new CustomerInput(
+        name: 'Acme Inc',
+        document: '12-3456789',
+        email: 'billing@acme.test',
+        externalReference: 'cus-us-1',
+        country: 'US',
+        documentType: 'ein',
+        addressLine: '1 Market St',
+        city: 'San Francisco',
+        state: 'CA',
+    ));
+
+    $stored = $gw->getCustomers()[$result->externalId]['input'];
+
+    expect($stored->country)->toBe('US')
+        ->and($stored->documentType)->toBe('ein')
+        ->and($stored->state)->toBe('CA');
 });

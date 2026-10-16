@@ -5,31 +5,80 @@ declare(strict_types=1);
 namespace Notfy\HubFinancial\Gateways\Fake;
 
 use Notfy\HubFinancial\Contracts\BillingGateway;
+use Notfy\HubFinancial\Contracts\StatementGateway;
 use Notfy\HubFinancial\Contracts\SubscriptionGateway;
 use Notfy\HubFinancial\Contracts\WebhookHandler;
+use Notfy\HubFinancial\Domain\Enums\Capability;
+use Notfy\HubFinancial\Domain\Enums\ChargeStatus;
 use Notfy\HubFinancial\Domain\Enums\PaymentEventType;
+use Notfy\HubFinancial\Domain\Enums\PaymentMethod;
+use Notfy\HubFinancial\DTO\AccountBalance;
 use Notfy\HubFinancial\DTO\ChargeInput;
 use Notfy\HubFinancial\DTO\ChargeResult;
 use Notfy\HubFinancial\DTO\CustomerInput;
 use Notfy\HubFinancial\DTO\CustomerResult;
+use Notfy\HubFinancial\DTO\StatementEntry;
+use Notfy\HubFinancial\DTO\StatementQuery;
 use Notfy\HubFinancial\Support\ApiPayload;
 use Notfy\HubFinancial\Support\GatewayAccount;
 use Notfy\HubFinancial\Webhooks\PaymentEvent;
 
 /**
- * Gateway em memória para testes. Implementa todos os contratos sem HTTP.
+ * Gateway em memória para testes e como referência mínima de um driver novo.
+ * Implementa todos os contratos sem HTTP e atende qualquer país e moeda.
  * Use forceChargeStatus() para simular transições de status em testes.
  */
-final class FakeGateway implements BillingGateway, SubscriptionGateway, WebhookHandler
+final class FakeGateway implements BillingGateway, StatementGateway, SubscriptionGateway, WebhookHandler
 {
     /** @var array<string, array<string, mixed>> */
     private array $customers = [];
 
-    /** @var array<string, array<string, mixed>> */
+    /** @var array<string, array{id: string, status: ChargeStatus, input: ChargeInput|null}> */
     private array $charges = [];
 
     /** @var array<string, array<string, mixed>> */
     private array $subscriptions = [];
+
+    /** @var list<StatementEntry> */
+    private array $statement = [];
+
+    private int $balanceCents = 0;
+
+    private string $balanceCurrency = 'BRL';
+
+    // ─── DescribesGateway ────────────────────────────────────────────────────
+
+    /**
+     * @return list<Capability>
+     */
+    public function capabilities(): array
+    {
+        return Capability::cases();
+    }
+
+    /**
+     * @return list<string>
+     */
+    public function supportedCountries(): array
+    {
+        return ['*'];
+    }
+
+    /**
+     * @return list<string>
+     */
+    public function supportedCurrencies(): array
+    {
+        return ['*'];
+    }
+
+    /**
+     * @return list<PaymentMethod>
+     */
+    public function supportedPaymentMethods(): array
+    {
+        return PaymentMethod::cases();
+    }
 
     // ─── CustomerGateway ─────────────────────────────────────────────────────
 
@@ -60,39 +109,29 @@ final class FakeGateway implements BillingGateway, SubscriptionGateway, WebhookH
     public function createCharge(ChargeInput $input): ChargeResult
     {
         $id = 'fake_pay_'.$input->externalReference;
-        $this->charges[$id] = [
-            'id' => $id,
-            'status' => 'PENDING',
-            'input' => $input,
-        ];
+        $this->charges[$id] = ['id' => $id, 'status' => ChargeStatus::Pending, 'input' => $input];
 
-        return new ChargeResult(externalId: $id, status: 'PENDING');
+        return new ChargeResult(externalId: $id, status: ChargeStatus::Pending);
     }
 
     public function fetchCharge(string $externalId): ChargeResult
     {
-        $charge = $this->charges[$externalId] ?? ['id' => $externalId, 'status' => 'PENDING'];
-
         return new ChargeResult(
             externalId: $externalId,
-            status: ApiPayload::stringOrDefault($charge['status'] ?? null, 'PENDING'),
+            status: $this->charges[$externalId]['status'] ?? ChargeStatus::Pending,
         );
     }
 
     public function refundCharge(string $externalId, ?int $amountCents = null): bool
     {
-        if (isset($this->charges[$externalId])) {
-            $this->charges[$externalId]['status'] = 'REFUNDED';
-        }
+        $this->transitionCharge($externalId, ChargeStatus::Refunded);
 
         return true;
     }
 
     public function cancelCharge(string $externalId): bool
     {
-        if (isset($this->charges[$externalId])) {
-            $this->charges[$externalId]['status'] = 'DELETED';
-        }
+        $this->transitionCharge($externalId, ChargeStatus::Deleted);
 
         return true;
     }
@@ -161,8 +200,29 @@ final class FakeGateway implements BillingGateway, SubscriptionGateway, WebhookH
         return true;
     }
 
+    // ─── StatementGateway ────────────────────────────────────────────────────
+
+    /**
+     * @return list<StatementEntry>
+     */
+    public function fetchStatement(StatementQuery $query): array
+    {
+        return array_values(array_filter(
+            $this->statement,
+            static fn (StatementEntry $entry): bool => $entry->date >= $query->from && $entry->date <= $query->to,
+        ));
+    }
+
+    public function fetchBalance(?string $accountId = null): AccountBalance
+    {
+        return new AccountBalance($this->balanceCents, $this->balanceCurrency);
+    }
+
     // ─── WebhookHandler ──────────────────────────────────────────────────────
 
+    /**
+     * @param  array<string, string>  $headers
+     */
     public function verify(string $rawBody, array $headers, GatewayAccount $account): bool
     {
         return true;
@@ -188,15 +248,25 @@ final class FakeGateway implements BillingGateway, SubscriptionGateway, WebhookH
 
     // ─── Helpers para testes ─────────────────────────────────────────────────
 
-    public function forceChargeStatus(string $externalId, string $status): void
+    public function forceChargeStatus(string $externalId, ChargeStatus $status): void
     {
-        if (isset($this->charges[$externalId])) {
-            $this->charges[$externalId]['status'] = $status;
-        }
+        $this->transitionCharge($externalId, $status);
     }
 
     /**
-     * @return array<string, array<string, mixed>>
+     * Define o extrato e o saldo que o gateway devolve.
+     *
+     * @param  list<StatementEntry>  $entries
+     */
+    public function seedStatement(array $entries, int $balanceCents = 0, string $currency = 'BRL'): void
+    {
+        $this->statement = $entries;
+        $this->balanceCents = $balanceCents;
+        $this->balanceCurrency = $currency;
+    }
+
+    /**
+     * @return array<string, array{id: string, status: ChargeStatus, input: ChargeInput|null}>
      */
     public function getCharges(): array
     {
@@ -217,5 +287,12 @@ final class FakeGateway implements BillingGateway, SubscriptionGateway, WebhookH
     public function getSubscriptions(): array
     {
         return $this->subscriptions;
+    }
+
+    private function transitionCharge(string $externalId, ChargeStatus $status): void
+    {
+        if (isset($this->charges[$externalId])) {
+            $this->charges[$externalId]['status'] = $status;
+        }
     }
 }

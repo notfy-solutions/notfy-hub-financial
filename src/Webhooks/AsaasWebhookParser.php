@@ -24,6 +24,9 @@ final class AsaasWebhookParser implements WebhookHandler
         return hash_equals($expectedToken, $receivedToken);
     }
 
+    /**
+     * @param  array<string, string>  $headers
+     */
     public function verify(string $rawBody, array $headers, GatewayAccount $account): bool
     {
         $token = $headers['asaas-access-token'] ?? $headers['Asaas-Access-Token'] ?? null;

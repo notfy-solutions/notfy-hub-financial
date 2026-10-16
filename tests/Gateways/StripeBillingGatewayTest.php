@@ -2,6 +2,8 @@
 
 declare(strict_types=1);
 
+use Notfy\HubFinancial\Domain\Enums\ChargeStatus;
+use Notfy\HubFinancial\Domain\Enums\PaymentMethod;
 use Notfy\HubFinancial\DTO\ChargeInput;
 use Notfy\HubFinancial\DTO\CustomerInput;
 use Notfy\HubFinancial\Exceptions\StripeApiException;
@@ -15,13 +17,13 @@ function stripeGateway(): StripeBillingGateway
     return new StripeBillingGateway(new StripeClient('sk_test_123'), 'usd');
 }
 
-function chargeInputWithType(string $billingType, string $externalReference): ChargeInput
+function chargeInputWithType(PaymentMethod $paymentMethod, string $externalReference): ChargeInput
 {
     return new ChargeInput(
         customerExternalId: 'cus_123',
         amountCents: 1000,
         dueDate: '2026-09-01',
-        billingType: $billingType,
+        paymentMethod: $paymentMethod,
         description: 'Cobrança',
         externalReference: $externalReference,
     );
@@ -137,14 +139,14 @@ it('creates and auto-confirms a charge when a payment method token is given', fu
         customerExternalId: 'cus_123',
         amountCents: 10000,
         dueDate: '2026-09-01',
-        billingType: 'CREDIT_CARD',
+        paymentMethod: PaymentMethod::Card,
         description: 'Assinatura mensal',
         externalReference: 'invoice-1',
         cardToken: 'pm_card_visa',
     ));
 
     expect($result->externalId)->toBe('pi_123')
-        ->and($result->status)->toBe('RECEIVED');
+        ->and($result->status)->toBe(ChargeStatus::Received);
 
     $request = stripeHttpFake()->requests[0];
     expect($request['params']['amount'])->toBe(10000)
@@ -162,7 +164,7 @@ it('translates a Stripe API error into a StripeApiException when creating a char
         'error' => ['type' => 'card_error', 'message' => 'Your card was declined.'],
     ], 402);
 
-    stripeGateway()->createCharge(chargeInputWithType('CREDIT_CARD', 'invoice-declined'));
+    stripeGateway()->createCharge(chargeInputWithType(PaymentMethod::Card, 'invoice-declined'));
 })->throws(StripeApiException::class, 'Your card was declined.');
 
 it('translates a Stripe API error into a StripeApiException when fetching a charge', function () {
@@ -184,12 +186,12 @@ it('creates a charge without confirming it when there is no payment method token
         customerExternalId: 'cus_123',
         amountCents: 5000,
         dueDate: '2026-09-01',
-        billingType: 'UNDEFINED',
+        paymentMethod: PaymentMethod::Undefined,
         description: 'Cobrança avulsa',
         externalReference: 'invoice-2',
     ));
 
-    expect($result->status)->toBe('PENDING');
+    expect($result->status)->toBe(ChargeStatus::Pending);
 
     $request = stripeHttpFake()->requests[0];
     expect(array_key_exists('confirm', $request['params']))->toBeFalse()
@@ -198,11 +200,11 @@ it('creates a charge without confirming it when there is no payment method token
 
 it('maps billing types to Stripe payment method types', function () {
     stripeHttpFake()->queueResponse('post', '/v1/payment_intents', ['id' => 'pi_boleto', 'object' => 'payment_intent', 'status' => 'requires_action']);
-    stripeGateway()->createCharge(chargeInputWithType('BOLETO', 'invoice-boleto'));
+    stripeGateway()->createCharge(chargeInputWithType(PaymentMethod::Boleto, 'invoice-boleto'));
     expect(stripeHttpFake()->requests[0]['params']['payment_method_types'])->toBe(['boleto']);
 
     stripeHttpFake()->queueResponse('post', '/v1/payment_intents', ['id' => 'pi_pix', 'object' => 'payment_intent', 'status' => 'requires_action']);
-    stripeGateway()->createCharge(chargeInputWithType('PIX', 'invoice-pix'));
+    stripeGateway()->createCharge(chargeInputWithType(PaymentMethod::Pix, 'invoice-pix'));
     expect(stripeHttpFake()->requests[1]['params']['payment_method_types'])->toBe(['pix']);
 });
 
@@ -244,7 +246,7 @@ it('extracts boleto and pix details from next_action', function () {
         ->and($result->pixCopyPaste)->toBe('00020126...copy-paste');
 });
 
-it('maps every payment intent status to the canonical charge status', function (string $stripeStatus, string $expected) {
+it('maps every payment intent status to the canonical charge status', function (string $stripeStatus, ChargeStatus $expected) {
     stripeHttpFake()->queueResponse('get', "/v1/payment_intents/pi_{$stripeStatus}", [
         'id' => "pi_{$stripeStatus}",
         'object' => 'payment_intent',
@@ -253,14 +255,14 @@ it('maps every payment intent status to the canonical charge status', function (
 
     expect(stripeGateway()->fetchCharge("pi_{$stripeStatus}")->status)->toBe($expected);
 })->with([
-    ['succeeded', 'RECEIVED'],
-    ['requires_capture', 'CONFIRMED'],
-    ['canceled', 'DELETED'],
-    ['processing', 'PENDING'],
-    ['requires_action', 'PENDING'],
-    ['requires_confirmation', 'PENDING'],
-    ['requires_payment_method', 'PENDING'],
-    ['some_future_status', 'PENDING'],
+    ['succeeded', ChargeStatus::Received],
+    ['requires_capture', ChargeStatus::Confirmed],
+    ['canceled', ChargeStatus::Deleted],
+    ['processing', ChargeStatus::Pending],
+    ['requires_action', ChargeStatus::Pending],
+    ['requires_confirmation', ChargeStatus::Pending],
+    ['requires_payment_method', ChargeStatus::Pending],
+    ['some_future_status', ChargeStatus::Pending],
 ]);
 
 it('refunds a charge fully and partially', function () {
@@ -388,4 +390,56 @@ it('creates a billing portal session', function () {
     $params = stripeHttpFake()->requests[0]['params'];
     expect($params['customer'])->toBe('cus_123')
         ->and($params['return_url'])->toBe('https://app.notfy.com/return');
+});
+
+it('charges in the currency of the input and maps international payment methods', function () {
+    stripeHttpFake()->queueResponse('post', '/v1/payment_intents', ['id' => 'pi_eur', 'object' => 'payment_intent', 'status' => 'requires_action']);
+
+    stripeGateway()->createCharge(new ChargeInput(
+        customerExternalId: 'cus_1',
+        amountCents: 4200,
+        dueDate: '2026-10-20',
+        paymentMethod: PaymentMethod::SepaDebit,
+        description: 'Invoice',
+        externalReference: 'invoice-eur',
+        currency: 'EUR',
+    ));
+
+    $request = stripeHttpFake()->requests[0];
+
+    expect($request['params']['currency'])->toBe('eur')
+        ->and($request['params']['payment_method_types'])->toBe(['sepa_debit']);
+
+    stripeHttpFake()->queueResponse('post', '/v1/payment_intents', ['id' => 'pi_ach', 'object' => 'payment_intent', 'status' => 'requires_action']);
+
+    stripeGateway()->createCharge(chargeInputWithType(PaymentMethod::Ach, 'invoice-ach'));
+
+    expect(stripeHttpFake()->requests[1]['params']['payment_method_types'])->toBe(['us_bank_account']);
+});
+
+it('sends the address and document type of an international customer', function () {
+    stripeHttpFake()->queueResponse('post', '/v1/customers', ['id' => 'cus_us', 'object' => 'customer']);
+
+    stripeGateway()->createCustomer(new CustomerInput(
+        name: 'Acme Inc',
+        document: '12-3456789',
+        email: 'billing@acme.test',
+        externalReference: 'cus-us-1',
+        postalCode: '94105',
+        country: 'US',
+        documentType: 'ein',
+        addressLine: '1 Market St',
+        city: 'San Francisco',
+        state: 'CA',
+    ));
+
+    $params = stripeHttpFake()->requests[0]['params'];
+
+    expect($params['address'])->toBe([
+        'country' => 'US',
+        'line1' => '1 Market St',
+        'city' => 'San Francisco',
+        'state' => 'CA',
+        'postal_code' => '94105',
+    ])->and($params['metadata']['document_type'])->toBe('ein');
 });

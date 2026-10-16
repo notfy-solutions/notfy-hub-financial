@@ -3,7 +3,9 @@
 declare(strict_types=1);
 
 use Notfy\HubFinancial\Gateways\Asaas\AsaasBillingGateway;
+use Notfy\HubFinancial\Gateways\Asaas\AsaasPlugin;
 use Notfy\HubFinancial\Gateways\Stripe\StripeBillingGateway;
+use Notfy\HubFinancial\Gateways\Stripe\StripePlugin;
 
 return [
     /*
@@ -37,6 +39,18 @@ return [
             'webhook_secret' => env('STRIPE_WEBHOOK_SECRET'),
             'default_currency' => env('STRIPE_DEFAULT_CURRENCY', 'usd'),
         ],
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Plugins de gateway
+    |--------------------------------------------------------------------------
+    | Classes que implementam GatewayPlugin. Um provedor novo (outro país) entra
+    | aqui; o ServiceProvider do pacote não precisa mudar.
+    */
+    'plugins' => [
+        AsaasPlugin::class,
+        StripePlugin::class,
     ],
 
     /*
