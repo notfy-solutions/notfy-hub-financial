@@ -40,6 +40,7 @@ Se um dia for necessário versionar/distribuir separadamente (outro time, CI iso
 - `Domain\Enums\{PaymentMethod, ChargeStatus, Capability, ...}` — vocabulário universal: meios locais (Boleto, Pix) e internacionais (cartão, ACH, débito SEPA, transferência, carteira).
 - `DTO\ChargeInput` / `ChargeResult` / `CustomerInput` — dados tipados e agnósticos de país (moeda ISO 4217 na cobrança; país, tipo de documento e endereço no cliente).
 - `Gateways\Asaas\*` — Brasil: Pix, boleto e cartão, via HTTP puro (`AsaasHttpClient`), só em BRL.
+- `Gateways\Ailos\*` — Brasil (**único país suportado por ora**): boleto bancário 085 do Sistema AILOS (API de Cobrança v2), só em BRL e só boleto. Autenticação OAuth2 (`Credentials\OAuth2`); sem webhook (a conciliação é por arquivo de retorno: `requestReturnFile`/`listReturnFiles`/`downloadReturnFile`) e sem baixa/estorno (o manual não documenta). Geração em lote por `createBatch`/`fetchBatch`.
 - `Gateways\Stripe\*` — mundo: cartão, ACH, SEPA e outros meios, em qualquer moeda, via `stripe/stripe-php`.
 - `Gateways\Fake\FakeGateway` — gateway em memória que implementa todos os contratos (inclui extrato); serve para testes e como referência mínima de um driver novo.
 - `Support\GatewayResolver::resolve($accounts, $context, $method, $capability)` — recebe os `GatewayAccount`s da aplicação e escolhe o gateway por preferência do contexto, roteamento (`config/hub-financial.php` → `routing`: Brasil → Asaas, demais → Stripe) e, por último, qualquer conta que atenda país, moeda, meio de pagamento e capacidade. Também expõe `supportsCountry()` e `available()`. Não lê credencial de lugar nenhum nem guarda estado entre chamadas (seguro em Octane/multi-tenant).
@@ -68,12 +69,13 @@ A aplicação monta o contexto a partir do cadastro do cliente (`DefaultGatewayC
 
 ## Credenciais
 
-O pacote **nunca lê credencial** de `.env`, `config` ou banco: quem usa o pacote decide de onde vêm (env, banco por tenant, cofre) e entrega tudo pronto em `GatewayAccount` (`provider`, `credentials`, `webhookSecret`, `options`). Opções por provedor: Asaas `environment` (`production`|`sandbox`); Stripe `default_currency` e `base_url` (só para servidor de testes).
+O pacote **nunca lê credencial** de `.env`, `config` ou banco: quem usa o pacote decide de onde vêm (env, banco por tenant, cofre) e entrega tudo pronto em `GatewayAccount` (`provider`, `credentials`, `webhookSecret`, `options`). Opções por provedor: Asaas `environment` (`production`|`sandbox`); AILOS `convenio` (obrigatória), `carteira` (padrão 1), `environment` e `base_url` (obrigatória em produção, informada pela cooperativa); Stripe `default_currency` e `base_url` (só para servidor de testes).
 
 ```php
 $accounts = [
     new GatewayAccount('asaas', new ApiKey($tenant->asaas_key), $tenant->asaas_token, ['environment' => 'production']),
     new GatewayAccount('stripe', new ApiKey($tenant->stripe_key), $tenant->stripe_whsec),
+    new GatewayAccount('ailos', new OAuth2($tenant->ailos_id, $tenant->ailos_secret, $tenant->ailos_token_url), options: ['convenio' => $tenant->ailos_convenio, 'environment' => 'production', 'base_url' => $tenant->ailos_url]),
 ];
 
 $gateway = app(GatewayResolver::class)->resolve(
@@ -84,6 +86,14 @@ $gateway = app(GatewayResolver::class)->resolve(
 
 $event = app(WebhookRouter::class)->handle('stripe', $rawBody, $headers, $accounts[1]);
 ```
+
+### AILOS: o que a aplicação precisa saber
+
+- O AILOS **não está no `routing`** (Brasil continua no Asaas por padrão); escolha-o com a preferência do contexto ou passando só a conta AILOS ao resolvedor.
+- `ChargeInput::$customerExternalId` é o **CPF/CNPJ** do pagador, que precisa estar cadastrado (`createCustomer`, que exige CEP, logradouro, bairro, cidade e UF). O boleto embute o cadastro.
+- O boleto exige um **sequencial de até 9 dígitos que não repete nem retrocede**: passe em `extra['numero_boleto']` (ou `externalReference` numérico). O resultado devolve linha digitável e código de barras em `ChargeResult::$nextAction->data`.
+- Instruções (multa, juros, descontos, protesto, negativação) vão em `extra['instrucoes']` com os nomes do manual (`tipoMulta`, `valorMulta`...).
+- Antes de produzir, o manual exige homologação: enviar 3 boletos de teste em PDF para a equipe de Cobrança do AILOS.
 
 ## Testando o gateway Stripe (SDK oficial)
 

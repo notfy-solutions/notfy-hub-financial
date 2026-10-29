@@ -24,5 +24,6 @@ final class CustomerInput
         public readonly ?string $addressLine = null,
         public readonly ?string $city = null,
         public readonly ?string $state = null,
+        public readonly ?string $neighborhood = null,
     ) {}
 }

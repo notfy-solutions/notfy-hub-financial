@@ -46,6 +46,18 @@ final class ApiPayload
         return $list;
     }
 
+    /**
+     * @return list<string>
+     */
+    public static function toListOfStrings(mixed $data): array
+    {
+        if (! is_array($data)) {
+            return [];
+        }
+
+        return array_values(array_filter($data, is_string(...)));
+    }
+
     public static function optionalString(mixed $value): ?string
     {
         return is_string($value) ? $value : null;

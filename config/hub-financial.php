@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use Notfy\HubFinancial\Gateways\Ailos\AilosPlugin;
 use Notfy\HubFinancial\Gateways\Asaas\AsaasPlugin;
 use Notfy\HubFinancial\Gateways\Stripe\StripePlugin;
 
@@ -15,6 +16,7 @@ return [
     */
     'plugins' => [
         AsaasPlugin::class,
+        AilosPlugin::class,
         StripePlugin::class,
     ],
 
